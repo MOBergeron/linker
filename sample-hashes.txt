@@ -1,0 +1,3 @@
+DOMAIN\userCracked:1000:aad3b435b51404eeaad3b435b51404ee:6b1bc21bc668461356c65364bb261a14::: (status=Enabled)
+DOMAIN\userDisable:1001:aad3b435b51404eeaad3b435b51404ee:6b1bc21bc668461356c65364bb261a14::: (status=Disabled)
+DOMAIN\userUncracked:1002:aad3b435b51404eeaad3b435b51404ee:8b17ae3db189e4da37a2c0004008c8fc::: (status=Enabled)

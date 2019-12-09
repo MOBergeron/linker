@@ -104,29 +104,25 @@ def correlation(accounts, crackedDict, **kwargs):
 	return enabledAcc, disabledAcc, uncrackedAcc, passwordCount
 
 def showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **kwargs):
-	if(len(enabledAcc) > 0):
-		print("Enabled accounts ({}):".format(len(enabledAcc)))
-		for account in sorted(enabledAcc, key=attrgetter('domain', 'name')):
-			print(formatResult(account, **kwargs))
+	print("Enabled accounts ({}):".format(len(enabledAcc)))
+	for account in sorted(enabledAcc, key=attrgetter('domain', 'name')):
+		print(formatResult(account, **kwargs))
 		
-	else:
-		print("No enabled account was found.")
-	
-	print()
+	print("")
 
 	if(kwargs["showDisabled"]):
 		print("Disabled accounts ({}):".format(len(disabledAcc)))
 		for account in sorted(disabledAcc, key=attrgetter('domain', 'name')):
 			print(formatResult(account, **kwargs))
 	
-		print()
+		print("")
 
 	if(kwargs["showUncracked"]):
 		print("Uncracked accounts ({}):".format(len(uncrackedAcc)))
 		for account in sorted(uncrackedAcc, key=attrgetter('domain', 'name')):
 			print(formatResult(account, **kwargs))
 	
-		print()
+		print("")
 
 	#TODO, show users with specific password.
 	#if(kwargs["showPasswords"]):
@@ -151,11 +147,11 @@ def showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **kwargs):
 			print("{tab}Number of disabled (dis):{padding}{percent}".format(tab=tab, padding=" "*(50-25-len(tab)-len(str(nbDisabled))), percent=nbDisabled))
 			print("{tab}Number of uncracked (uc):{padding}{percent}".format(tab=tab, padding=" "*(50-25-len(tab)-len(str(nbUncracked))), percent=nbUncracked))
 			print("{tab}Total (en + dis + un):{padding}{percent}".format(tab=tab, padding=" "*(50-22-len(tab)-len(str(total))), percent=total))
-			print()
+			print("")
 			print("{tab}Percentage of cracked (en):{padding}{percent}%".format(tab=tab, padding=" "*(50-27-len(tab)-len(str(pCracked))-1), percent=pCracked))
 			print("{tab}Percentage of cracked (dis):{padding}{percent}%".format(tab=tab, padding=" "*(50-28-len(tab)-len(str(pDisCracked))-1), percent=pDisCracked))
 			print("{tab}Percentage of cracked (en+dis):{padding}{percent}%".format(tab=tab, padding=" "*(50-31-len(tab)-len(str(pTotalCracked))-1), percent=pTotalCracked))
-			print()
+			print("")
 			print("{tab}Password count:".format(tab=tab))
 			for k, v in dict(sorted(passwordCount.items(), key=lambda x: x[1], reverse=True)).items():
 				if(v > 1):
