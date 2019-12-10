@@ -28,7 +28,7 @@ class Account(object):
 		
 def getContent(dump, cracked, **kwargs):
 	with open(dump,'r') as f:
-		accounts = []
+		accounts = set()
 		content = f.read().split("\n")
 		for line in content:
 			if(not line):
@@ -59,7 +59,7 @@ def getContent(dump, cracked, **kwargs):
 				if(match.group("domain")):
 					domain = match.group("domain").upper()
 
-				accounts.append(Account(name=accName, ntHash=ntHash, status=accStatus, domain=domain))
+				accounts.add(Account(name=accName, ntHash=ntHash, status=accStatus, domain=domain))
 
 		f.close()
 
@@ -77,9 +77,9 @@ def getContent(dump, cracked, **kwargs):
 	return accounts, crackedDict
 
 def correlation(accounts, crackedDict, **kwargs):
-	enabledAcc = []
-	disabledAcc = []
-	uncrackedAcc = []
+	enabledAcc = set()
+	disabledAcc = set()
+	uncrackedAcc = set()
 	passwordCount = {}
 
 	for account in accounts:
@@ -94,61 +94,61 @@ def correlation(accounts, crackedDict, **kwargs):
 				passwordCount[account.password] += 1
 
 			if(account.status):
-				enabledAcc.append(account)
+				enabledAcc.add(account)
 			else:
-				disabledAcc.append(account)
+				disabledAcc.add(account)
 		elif(kwargs["showStats"] or kwargs["showUncracked"]):
-			uncrackedAcc.append(account)
+			uncrackedAcc.add(account)
 	
 	return enabledAcc, disabledAcc, uncrackedAcc, passwordCount
 
-def findAccountsWithPassword(accounts, password):
+def findAccountsWithPassword(accounts, password, **kwargs):
 	result = set()
 
 	for account in accounts:
 		if(account.password == password):
 			result.add(account)
 
-	return sorted(result, key=lambda x: x.name)
+	return sorting(result, key=lambda x: x.name, **kwargs)
 
-def findAccountsWithNTHash(accounts, ntHash):
+def findAccountsWithNTHash(accounts, ntHash, **kwargs):
 	result = set()
 
 	for account in accounts:
 		if(account.ntHash == ntHash):
 			result.add(account)
 
-	return sorted(result, key=lambda x: x.name)
+	return sorting(result, key=lambda x: x.name, **kwargs)
 
 def showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **kwargs):
 	print("Enabled accounts ({}):".format(len(enabledAcc)))
-	for account in sorted(enabledAcc, key=attrgetter('domain', 'name')):
+	for account in sorting(enabledAcc, key=attrgetter('domain', 'name'), **kwargs):
 		print(formatResult(account, **kwargs))
 		
 	print("")
 
 	if(kwargs["showDisabled"]):
 		print("Disabled accounts ({}):".format(len(disabledAcc)))
-		for account in sorted(disabledAcc, key=attrgetter('domain', 'name')):
+		for account in sorting(disabledAcc, key=attrgetter('domain', 'name'), **kwargs):
 			print(formatResult(account, **kwargs))
 	
 		print("")
 
 	if(kwargs["showUncracked"]):
 		print("Uncracked accounts ({}):".format(len(uncrackedAcc)))
-		for account in sorted(uncrackedAcc, key=attrgetter('domain', 'name')):
+		for account in sorting(uncrackedAcc, key=attrgetter('domain', 'name'), **kwargs):
 			print(formatResult(account, **kwargs))
 	
 		print("")
 
 	if(kwargs["showMatchingPassword"]):
-		accounts = enabledAcc[:]
+		accounts = enabledAcc.copy()
 		
 		if(kwargs["showDisabled"]):
-			accounts += disabledAcc
+			accounts = accounts.union(disabledAcc)
 		
-		for password in sorted(kwargs["showMatchingPassword"]):
-			result = findAccountsWithPassword(accounts, password)
+		for password in sorting(kwargs["showMatchingPassword"], **kwargs):
+			result = findAccountsWithPassword(accounts, password, **kwargs)
 			if(result):
 				print("Accounts with password {}".format(password))
 				for account in result:
@@ -162,10 +162,10 @@ def showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **kwargs):
 			print("")
 
 	if(kwargs["showMatchingNTHash"]):
-		accounts = enabledAcc + disabledAcc + uncrackedAcc
+		accounts = enabledAcc.union(disabledAcc, uncrackedAcc)
 		
-		for ntHash in sorted(kwargs["showMatchingNTHash"]):
-			result = findAccountsWithNTHash(accounts, ntHash)
+		for ntHash in sorting(kwargs["showMatchingNTHash"], **kwargs):
+			result = findAccountsWithNTHash(accounts, ntHash, **kwargs)
 			if(result):
 				print("Accounts with NTHash {}".format(ntHash))
 				for account in result:
@@ -199,7 +199,8 @@ def showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **kwargs):
 			print("{tab}Percentage of cracked (en+dis):{padding}{percent}%".format(tab=tab, padding=" "*(50-31-len(tab)-len(str(pTotalCracked))-1), percent=pTotalCracked))
 			print("")
 			print("{tab}Password count:".format(tab=tab))
-			for k, v in dict(sorted(passwordCount.items(), key=lambda x: x[1], reverse=True)).items():
+
+			for k, v in dict(sorting(passwordCount.items(), key=lambda x: x[1], reverse=True, **kwargs)).items():
 				if(v > 1):
 					print("{tab}{password}{padding}{value}".format(tab=tab*2, password=k, padding=" "*(50-len(tab*2) - len(k) - len(str(v))), value=v))
 		else:
@@ -257,6 +258,13 @@ def formatResult(account, showPassword=True, **kwargs):
 
 	return result
 
+def sorting(var, key=None, reverse=False, **kwargs):
+	if(kwargs["performance"]):
+		return var
+	else:
+		return sorted(var, key=key, reverse=reverse)
+
+
 if __name__=='__main__':
 	import argparse
 	parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
@@ -273,6 +281,7 @@ if __name__=='__main__':
 	parser.add_argument("-P", "--password", dest="showMatchingPassword", help="Show matching password in the result.", action="append", type=str, default=None)
 	parser.add_argument("-N", "--hash", dest="showMatchingNTHash", help="Show matching hash in the result.", action="append", type=str, default=None)
 	parser.add_argument("-U", "--user", dest="highlightUser", help="Highlight matching user in the result.", action="append", type=str, default=None)
+	parser.add_argument("-p", "--performance", dest="performance", help="Need more performance? This will NOT sort the results.", action="store_true")
 	args = parser.parse_args()
 
 	if(args.showMatchingDomain):
