@@ -26,8 +26,8 @@ class Account(object):
 	def __str__(self):
 		return "{}".format(self.name)
 		
-def getContent(hashes, cracked, **kwargs):
-	with open(hashes,'r') as f:
+def getContent(dump, cracked, **kwargs):
+	with open(dump,'r') as f:
 		accounts = []
 		content = f.read().split("\n")
 		for line in content:
@@ -260,15 +260,16 @@ def formatResult(account, showPassword=True, **kwargs):
 if __name__=='__main__':
 	import argparse
 	parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
-	parser.add_argument("-v", "--verbose", dest="verbose", help="Verbose mode", action="store_true")
-	parser.add_argument("-H", "--hashes", dest="hashes", help="Hashes file.\nLine format : [DOMAIN\\]USERNAME:USERID:LM:NT::: (status=(Dis|En)abled)", type=str, required=True)
-	parser.add_argument("-c", "--cracked", dest="cracked", help="Cracked hash file.", type=str, required=True)
-	parser.add_argument("-D", "--domain", dest="showMatchingDomain", help="Show only matching domain.\nMultiple -d flag can be used.\nExample: -d foo.lan -d bar.lan", type=str.upper, action="append", default=None)
-	parser.add_argument("-dis", "--disabled", dest="showDisabled", help="Show disabled in the result.\nDefault status is 'enabled' if not present in hashes file.", action="store_true")
+	parser.add_argument(metavar="dump_file", dest="dump", help="Dump file.\nLine format : [DOMAIN\\]USERNAME:USERID:LM:NT::: (status=(Dis|En)abled)", type=str)
+	parser.add_argument(metavar="cracked_file", dest="cracked", help="Cracked hash file.", type=str)
+	parser.add_argument("-a", "--all", dest="all", help="Show everything.", action="store_true")
+	parser.add_argument("-v", "--verbose", dest="verbose", help="Verbose mode.", action="store_true")
+	parser.add_argument("-i", "--disabled", dest="showDisabled", help="Show disabled in the result.\nDefault status is 'enabled' if not present in hashes file.", action="store_true")
 	parser.add_argument("-u", "--uncracked", dest="showUncracked", help="Show uncracked accounts in the result.", action="store_true")
 	parser.add_argument("-n", "--nthash", dest="showNTHash", help="Show NTHash in the result.", action="store_true")
 	parser.add_argument("-d", "--showdomain", dest="showDomain", help="Show domain in the result.", action="store_true")
 	parser.add_argument("-s", "--stats", dest="showStats", help="Show statistics in the result.", action="store_true")
+	parser.add_argument("-D", "--domain", dest="showMatchingDomain", help="Show only matching domain.\nMultiple -d flag can be used.\nExample: -d foo.lan -d bar.lan", type=str.upper, action="append", default=None)
 	parser.add_argument("-P", "--password", dest="showMatchingPassword", help="Show matching password in the result.", action="append", type=str, default=None)
 	parser.add_argument("-N", "--hash", dest="showMatchingNTHash", help="Show matching hash in the result.", action="append", type=str, default=None)
 	parser.add_argument("-U", "--user", dest="highlightUser", help="Highlight matching user in the result.", action="append", type=str, default=None)
@@ -286,8 +287,15 @@ if __name__=='__main__':
 	if(args.highlightUser):
 		args.highlightUser = set(args.highlightUser)
 
-	if(args.hashes and (not os.path.exists(args.hashes) or not os.path.isfile(args.hashes))):
-		raise FileNotFoundError("{} was not found.".format(args.hashes))
+	if(args.all):
+		args.showDisabled = True
+		args.showUncracked = True
+		args.showNTHash = True
+		args.showDomain = True
+		args.showStats = True
+
+	if(args.dump and (not os.path.exists(args.dump) or not os.path.isfile(args.dump))):
+		raise FileNotFoundError("{} was not found.".format(args.dump))
 	if(args.cracked and (not os.path.exists(args.cracked) or not os.path.isfile(args.cracked))):
 		raise FileNotFoundError("{} was not found.".format(args.cracked))
 
