@@ -33,7 +33,7 @@ class Account(object):
 def getContent(dump, cracked, **kwargs):
 	with open(dump,'r') as f:
 		accounts = set()
-		content = f.read().split("\n")
+		content = set(f.read().split("\n"))
 		for line in content:
 			if(not line):
 				continue
@@ -69,7 +69,7 @@ def getContent(dump, cracked, **kwargs):
 
 	with open(cracked,'r') as f:
 		crackedDict = {}
-		content = f.read().split("\n")
+		content = set(f.read().split("\n"))
 		for line in content:
 			if(not line):
 				continue
@@ -225,7 +225,7 @@ def formatResult(account, showPassword=True, **kwargs):
 		p += ":"
 
 	if(showPassword and account.password):
-		if(kwargs["highlightUser"] and account.name in kwargs["highlightUser"]):
+		if(kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]):
 			if(account.status):
 				result = "\033[92m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
 			else:
@@ -243,7 +243,7 @@ def formatResult(account, showPassword=True, **kwargs):
 		else:
 			result = "{tab}{accInfo}{padding}{password}".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
 	else:
-		if(kwargs["highlightUser"] and account.name in kwargs["highlightUser"]):
+		if(kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]):
 			if(account.status and account.password):
 				result = "\033[92m{tab}{accInfo}\033[00m".format(tab=tab, accInfo=p)
 			else:
@@ -283,8 +283,8 @@ if __name__=='__main__':
 	parser.add_argument("-s", "--stats", dest="showStats", help="Show statistics in the result.", action="store_true")
 	parser.add_argument("-D", "--domain", dest="showMatchingDomain", help="Show only matching domain.\nMultiple -d flag can be used.\nExample: -d foo.lan -d bar.lan", type=str.upper, action="append", default=None)
 	parser.add_argument("-P", "--password", dest="showMatchingPassword", help="Show matching password in the result.", action="append", type=str, default=None)
-	parser.add_argument("-N", "--hash", dest="showMatchingNTHash", help="Show matching hash in the result.", action="append", type=str, default=None)
-	parser.add_argument("-U", "--user", dest="highlightUser", help="Highlight matching user in the result.", action="append", type=str, default=None)
+	parser.add_argument("-N", "--hash", dest="showMatchingNTHash", help="Show matching hash in the result.", action="append", type=str.lower, default=None)
+	parser.add_argument("-U", "--user", dest="highlightUser", help="Highlight matching user in the result.", action="append", type=str.lower, default=None)
 	parser.add_argument("-p", "--performance", dest="performance", help="Need more performance? This will NOT sort the results.", action="store_true")
 	parser.add_argument("-t", "--time", dest="time", help="Print the elasped time to run the script.", action="store_true")
 	args = parser.parse_args()
