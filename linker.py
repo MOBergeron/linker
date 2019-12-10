@@ -35,7 +35,9 @@ def getContent(hashes, cracked, **kwargs):
 				continue
 			match = hashesRegex.match(line)
 			if(not match):
-				print("Error parsing: {}".format(line))
+				if(kwargs["verbose"]):
+					print("Error parsing: {}".format(line))
+				continue
 			else:
 				accName = None
 				ntHash = None
