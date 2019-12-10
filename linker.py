@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 import os
 import re
+import argparse
+
+from time import time
 from operator import attrgetter
+from decimal import getcontext, Decimal
 
 tab = " "*4
 hashesRegex = re.compile("((?P<domain>[^\\\\]+)\\\\)?(?P<accName>[^:\\\\\\$]+)(?P<machine>\\$)?:\\d+:[a-fA-F0-9]{32}:(?P<ntHash>[a-fA-F0-9]{32})::: ?(\\(status=(?P<accStatus>Dis|En)abled)\\)?")
@@ -176,7 +180,6 @@ def showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **kwargs):
 			print("")
 
 	if(kwargs["showStats"]):
-		from decimal import getcontext, Decimal
 		getcontext().prec = 4
 		nbEnabled = Decimal(len(enabledAcc))
 		nbDisabled = Decimal(len(disabledAcc))
@@ -203,6 +206,8 @@ def showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **kwargs):
 			for k, v in dict(sorting(passwordCount.items(), key=lambda x: x[1], reverse=True, **kwargs)).items():
 				if(v > 1):
 					print("{tab}{password}{padding}{value}".format(tab=tab*2, password=k, padding=" "*(50-len(tab*2) - len(k) - len(str(v))), value=v))
+
+			print("")
 		else:
 			print("Can't show stats if the total number of accounts is 0...")
 
@@ -266,7 +271,6 @@ def sorting(var, key=None, reverse=False, **kwargs):
 
 
 if __name__=='__main__':
-	import argparse
 	parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
 	parser.add_argument(metavar="dump_file", dest="dump", help="Dump file.\nLine format : [DOMAIN\\]USERNAME:USERID:LM:NT::: (status=(Dis|En)abled)", type=str)
 	parser.add_argument(metavar="cracked_file", dest="cracked", help="Cracked hash file.", type=str)
@@ -282,7 +286,11 @@ if __name__=='__main__':
 	parser.add_argument("-N", "--hash", dest="showMatchingNTHash", help="Show matching hash in the result.", action="append", type=str, default=None)
 	parser.add_argument("-U", "--user", dest="highlightUser", help="Highlight matching user in the result.", action="append", type=str, default=None)
 	parser.add_argument("-p", "--performance", dest="performance", help="Need more performance? This will NOT sort the results.", action="store_true")
+	parser.add_argument("-t", "--time", dest="time", help="Print the elasped time to run the script.", action="store_true")
 	args = parser.parse_args()
+
+	if(args.time or args.verbose):
+		startTime = Decimal(time())
 
 	if(args.showMatchingDomain):
 		args.showMatchingDomain = set(args.showMatchingDomain)
@@ -310,3 +318,8 @@ if __name__=='__main__':
 
 	(enabledAcc, disabledAcc, uncrackedAcc, passwordCount) = correlation(*getContent(**vars(args)), **vars(args))
 	showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **vars(args))
+
+	if(args.time or args.verbose):
+		endTime = Decimal(time())
+
+		print("Elasped time: {}s".format(endTime-startTime))
