@@ -142,7 +142,7 @@ def showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **kwargs):
 		print("")
 
 	if(kwargs["showMatchingPassword"]):
-		accounts = enabledAcc
+		accounts = enabledAcc[:]
 		
 		if(kwargs["showDisabled"]):
 			accounts += disabledAcc
