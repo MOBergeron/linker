@@ -224,8 +224,12 @@ def formatResult(account, showPassword=True, **kwargs):
 				result = "\033[92m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
 			else:
 				result = "\033[91m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
-
 		elif(kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]):
+			if(account.status):
+				result = "\033[93m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+			else:
+				result = "\033[91m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+		elif(kwargs["showMatchingNTHash"] and  account.ntHash in kwargs["showMatchingNTHash"]):
 			if(account.status):
 				result = "\033[93m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
 			else:
@@ -240,6 +244,11 @@ def formatResult(account, showPassword=True, **kwargs):
 				result = "\033[91m{tab}{accInfo}\033[00m".format(tab=tab, accInfo=p)
 		elif(kwargs["showMatchingPassword"] and account.password in kwargs["showMatchingPassword"]):
 			if(account.status and account.password):
+				result = "\033[92m{tab}{accInfo}\033[00m".format(tab=tab, accInfo=p)
+			else:
+				result = "\033[91m{tab}{accInfo}\033[00m".format(tab=tab, accInfo=p)
+		elif(kwargs["showMatchingNTHash"] and account.ntHash in kwargs["showMatchingNTHash"]):
+			if(account.status):
 				result = "\033[92m{tab}{accInfo}\033[00m".format(tab=tab, accInfo=p)
 			else:
 				result = "\033[91m{tab}{accInfo}\033[00m".format(tab=tab, accInfo=p)
