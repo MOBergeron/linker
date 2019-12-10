@@ -236,7 +236,7 @@ if __name__=='__main__':
 	import argparse
 	parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
 	parser.add_argument("-v", "--verbose", dest="verbose", help="Verbose mode", action="store_true")
-	parser.add_argument("-H", "--hashes", dest="hashes", help="Hashes file.\nLine format : DOMAIN\\USER:ID:LM:NT::: (status=(Dis|En)abled)", type=str, required=True)
+	parser.add_argument("-H", "--hashes", dest="hashes", help="Hashes file.\nLine format : [DOMAIN\\]USERNAME:USERID:LM:NT::: (status=(Dis|En)abled)", type=str, required=True)
 	parser.add_argument("-c", "--cracked", dest="cracked", help="Cracked hash file.", type=str, required=True)
 	parser.add_argument("-D", "--domain", dest="showMatchingDomain", help="Show only matching domain.\nMultiple -d flag can be used.\nExample: -d foo.lan -d bar.lan", type=str.upper, action="append", default=None)
 	parser.add_argument("-dis", "--disabled", dest="showDisabled", help="Show disabled in the result.\nDefault status is 'enabled' if not present in hashes file.", action="store_true")
