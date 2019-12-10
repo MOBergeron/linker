@@ -81,9 +81,6 @@ def correlation(accounts, crackedDict, **kwargs):
 	passwordCount = {}
 
 	for account in accounts:
-		if(not kwargs["showStats"] and not kwargs["showDisabled"] and not account.status):
-			continue
-
 		if(kwargs["showMatchingDomain"] and (not account.domain or not account.domain in kwargs["showMatchingDomain"])):
 			continue
 
@@ -102,6 +99,24 @@ def correlation(accounts, crackedDict, **kwargs):
 			uncrackedAcc.append(account)
 	
 	return enabledAcc, disabledAcc, uncrackedAcc, passwordCount
+
+def findAccountsWithPassword(accounts, password):
+	result = set()
+
+	for account in accounts:
+		if(account.password == password):
+			result.add(account)
+
+	return result
+
+def findAccountsWithNTHash(accounts, ntHash):
+	result = set()
+
+	for account in accounts:
+		if(account.ntHash == ntHash):
+			result.add(account)
+
+	return result
 
 def showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **kwargs):
 	print("Enabled accounts ({}):".format(len(enabledAcc)))
@@ -124,10 +139,39 @@ def showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **kwargs):
 	
 		print("")
 
-	#TODO, show users with specific password.
-	#if(kwargs["showPasswords"]):
-	#	for password in kwargs["showPasswords"]:
-	#		pass
+	if(kwargs["showMatchingPassword"]):
+		accounts = enabledAcc
+		
+		if(kwargs["showDisabled"]):
+			accounts += disabledAcc
+		
+		for password in sorted(kwargs["showMatchingPassword"]):
+			result = findAccountsWithPassword(accounts, password)
+			if(result):
+				print("Accounts with password {}".format(password))
+				for account in result:
+					print(formatResult(account, False, **kwargs))
+			else:
+				if(kwargs["showDisabled"]):
+					print("No account found with password {}".format(password))
+				else:
+					print("No enabled account found with password {}".format(password))
+
+			print("")
+
+	if(kwargs["showMatchingNTHash"]):
+		accounts = enabledAcc + disabledAcc + uncrackedAcc
+		
+		for ntHash in sorted(kwargs["showMatchingNTHash"]):
+			result = findAccountsWithNTHash(accounts, ntHash)
+			if(result):
+				print("Accounts with NTHash {}".format(ntHash))
+				for account in result:
+					print(formatResult(account, False, **kwargs))
+			else:
+				print("No account found with NTHash {}".format(ntHash))
+
+			print("")
 
 	if(kwargs["showStats"]):
 		from decimal import getcontext, Decimal
@@ -159,7 +203,7 @@ def showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **kwargs):
 		else:
 			print("Can't show stats if the total number of accounts is 0...")
 
-def formatResult(account, **kwargs):
+def formatResult(account, showPassword=True, **kwargs):
 	p = ""
 	if(kwargs["showDomain"] and account.domain):
 		p += account.domain
@@ -172,10 +216,19 @@ def formatResult(account, **kwargs):
 		p += account.ntHash
 		p += ":"
 
-	if(account.password):
-		result = "{tab}{accInfo}{padding}{password}".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+	if(showPassword and account.password):
+		if(kwargs["highlightUser"] and account.name in kwargs["highlightUser"]):
+			if(account.status):
+				result = "\033[92m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+			else:
+				result = "\033[91m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+		else:
+			result = "{tab}{accInfo}{padding}{password}".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
 	else:
-		result = "{tab}{accInfo}".format(tab=tab, accInfo=p)
+		if(kwargs["highlightUser"] and account.name in kwargs["highlightUser"]):
+			result = "\033[91m{tab}{accInfo}\033[00m".format(tab=tab, accInfo=p)
+		else:
+			result = "{tab}{accInfo}".format(tab=tab, accInfo=p)
 
 	return result
 
@@ -191,14 +244,22 @@ if __name__=='__main__':
 	parser.add_argument("-n", "--nthash", dest="showNTHash", help="Show NTHash in the result.", action="store_true")
 	parser.add_argument("-d", "--showdomain", dest="showDomain", help="Show domain in the result.", action="store_true")
 	parser.add_argument("-s", "--stats", dest="showStats", help="Show statistics in the result.", action="store_true")
-	#parser.add_argument("-p", "--password", dest="showPasswords", help="Show matching passwords in the result.", action="append", type=str, default=None)
+	parser.add_argument("-P", "--password", dest="showMatchingPassword", help="Show matching password in the result.", action="append", type=str, default=None)
+	parser.add_argument("-N", "--hash", dest="showMatchingNTHash", help="Show matching hash in the result.", action="append", type=str, default=None)
+	parser.add_argument("-U", "--user", dest="highlightUser", help="Highlight matching user in the result.", action="append", type=str, default=None)
 	args = parser.parse_args()
 
 	if(args.showMatchingDomain):
 		args.showMatchingDomain = set(args.showMatchingDomain)
 
-	#if(args.showPasswords):
-	#	args.showPasswords = set(args.showPasswords)
+	if(args.showMatchingPassword):
+		args.showMatchingPassword = set(args.showMatchingPassword)
+
+	if(args.showMatchingNTHash):
+		args.showMatchingNTHash = set(args.showMatchingNTHash)
+
+	if(args.highlightUser):
+		args.highlightUser = set(args.highlightUser)
 
 	if(args.hashes and (not os.path.exists(args.hashes) or not os.path.isfile(args.hashes))):
 		raise FileNotFoundError("{} was not found.".format(args.hashes))
