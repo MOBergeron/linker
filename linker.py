@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import os
 import re
-from operator import itemgetter, attrgetter
+from operator import attrgetter
 
 tab = " "*4
 hashesRegex = re.compile("((?P<domain>[^\\\\]+)\\\\)?(?P<accName>[^:\\\\\\$]+)(?P<machine>\\$)?:\\d+:[a-fA-F0-9]{32}:(?P<ntHash>[a-fA-F0-9]{32})::: ?(\\(status=(?P<accStatus>Dis|En)abled)\\)?")
@@ -109,7 +109,7 @@ def findAccountsWithPassword(accounts, password):
 		if(account.password == password):
 			result.add(account)
 
-	return result
+	return sorted(result, key=lambda x: x.name)
 
 def findAccountsWithNTHash(accounts, ntHash):
 	result = set()
@@ -118,7 +118,7 @@ def findAccountsWithNTHash(accounts, ntHash):
 		if(account.ntHash == ntHash):
 			result.add(account)
 
-	return result
+	return sorted(result, key=lambda x: x.name)
 
 def showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **kwargs):
 	print("Enabled accounts ({}):".format(len(enabledAcc)))
@@ -224,11 +224,25 @@ def formatResult(account, showPassword=True, **kwargs):
 				result = "\033[92m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
 			else:
 				result = "\033[91m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+
+		elif(kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]):
+			if(account.status):
+				result = "\033[93m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+			else:
+				result = "\033[91m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
 		else:
 			result = "{tab}{accInfo}{padding}{password}".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
 	else:
 		if(kwargs["highlightUser"] and account.name in kwargs["highlightUser"]):
-			result = "\033[91m{tab}{accInfo}\033[00m".format(tab=tab, accInfo=p)
+			if(account.status and account.password):
+				result = "\033[92m{tab}{accInfo}\033[00m".format(tab=tab, accInfo=p)
+			else:
+				result = "\033[91m{tab}{accInfo}\033[00m".format(tab=tab, accInfo=p)
+		elif(kwargs["showMatchingPassword"] and account.password in kwargs["showMatchingPassword"]):
+			if(account.status and account.password):
+				result = "\033[92m{tab}{accInfo}\033[00m".format(tab=tab, accInfo=p)
+			else:
+				result = "\033[91m{tab}{accInfo}\033[00m".format(tab=tab, accInfo=p)
 		else:
 			result = "{tab}{accInfo}".format(tab=tab, accInfo=p)
 
