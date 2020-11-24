@@ -8,7 +8,7 @@ from operator import attrgetter
 from decimal import getcontext, Decimal
 
 tab = " "*4
-hashesRegex = re.compile("((?P<domain>[^\\\\]+)\\\\)?(?P<accName>[^:\\\\\\$]+)(?P<machine>\\$)?:\\d+:[a-fA-F0-9]{32}:(?P<ntHash>[a-fA-F0-9]{32})::: ?(\\(status=(?P<accStatus>Dis|En)abled)\\)?")
+hashesRegex = re.compile("((?P<domain>[^\\\\]+)\\\\)?(?P<accName>[^:\\\\\\$]+)(?P<machine>\\$)?:\\d+:[a-fA-F0-9]{32}:(?P<ntHash>[a-fA-F0-9]{32})::: ?(\\(status=(?P<accStatus>Dis|En)abled\\))?")
 
 class Account(object):
 	def __init__(self, name, ntHash, status=True, domain=""):
@@ -45,7 +45,7 @@ def getContent(dump, cracked, **kwargs):
 			else:
 				accName = None
 				ntHash = None
-				accStatus = None
+				accStatus = True
 				domain = ""
 				machine = False
 				if(match.group("accName")):
@@ -192,20 +192,20 @@ def showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **kwargs):
 			pTotalCracked = Decimal(((nbEnabled+nbDisabled)/total)*100)
 
 			print("Statistics:")
-			print("{tab}Number of enabled (en):{padding}{percent}".format(tab=tab, padding=" "*(50-23-len(tab)-len(str(nbEnabled))), percent=nbEnabled))
-			print("{tab}Number of disabled (dis):{padding}{percent}".format(tab=tab, padding=" "*(50-25-len(tab)-len(str(nbDisabled))), percent=nbDisabled))
-			print("{tab}Number of uncracked (uc):{padding}{percent}".format(tab=tab, padding=" "*(50-25-len(tab)-len(str(nbUncracked))), percent=nbUncracked))
-			print("{tab}Total (en + dis + un):{padding}{percent}".format(tab=tab, padding=" "*(50-22-len(tab)-len(str(total))), percent=total))
+			print("{tab}Number of enabled (en):{padding}{percent}".format(tab=tab, padding=" "*(70-23-len(tab)-len(str(nbEnabled))), percent=nbEnabled))
+			print("{tab}Number of disabled (dis):{padding}{percent}".format(tab=tab, padding=" "*(70-25-len(tab)-len(str(nbDisabled))), percent=nbDisabled))
+			print("{tab}Number of uncracked (uc):{padding}{percent}".format(tab=tab, padding=" "*(70-25-len(tab)-len(str(nbUncracked))), percent=nbUncracked))
+			print("{tab}Total (en + dis + un):{padding}{percent}".format(tab=tab, padding=" "*(70-22-len(tab)-len(str(total))), percent=total))
 			print("")
-			print("{tab}Percentage of cracked (en):{padding}{percent}%".format(tab=tab, padding=" "*(50-27-len(tab)-len(str(pCracked))-1), percent=pCracked))
-			print("{tab}Percentage of cracked (dis):{padding}{percent}%".format(tab=tab, padding=" "*(50-28-len(tab)-len(str(pDisCracked))-1), percent=pDisCracked))
-			print("{tab}Percentage of cracked (en+dis):{padding}{percent}%".format(tab=tab, padding=" "*(50-31-len(tab)-len(str(pTotalCracked))-1), percent=pTotalCracked))
+			print("{tab}Percentage of cracked (en):{padding}{percent}%".format(tab=tab, padding=" "*(70-27-len(tab)-len(str(pCracked))-1), percent=pCracked))
+			print("{tab}Percentage of cracked (dis):{padding}{percent}%".format(tab=tab, padding=" "*(70-28-len(tab)-len(str(pDisCracked))-1), percent=pDisCracked))
+			print("{tab}Percentage of cracked (en+dis):{padding}{percent}%".format(tab=tab, padding=" "*(70-31-len(tab)-len(str(pTotalCracked))-1), percent=pTotalCracked))
 			print("")
 			print("{tab}Password count:".format(tab=tab))
 
 			for k, v in dict(sorting(passwordCount.items(), key=lambda x: x[1], reverse=True, **kwargs)).items():
 				if(v > 1):
-					print("{tab}{password}{padding}{value}".format(tab=tab*2, password=k, padding=" "*(50-len(tab*2) - len(k) - len(str(v))), value=v))
+					print("{tab}{password}{padding}{value}".format(tab=tab*2, password=k, padding=" "*(70-len(tab*2) - len(k) - len(str(v))), value=v))
 
 			print("")
 		else:
@@ -227,21 +227,21 @@ def formatResult(account, showPassword=True, **kwargs):
 	if(showPassword and account.password):
 		if(kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]):
 			if(account.status):
-				result = "\033[92m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+				result = "\033[92m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(100 - len(tab) - len(p) - len(account.password)), password=account.password)
 			else:
-				result = "\033[91m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+				result = "\033[91m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(100 - len(tab) - len(p) - len(account.password)), password=account.password)
 		elif(kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]):
 			if(account.status):
-				result = "\033[93m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+				result = "\033[93m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(100 - len(tab) - len(p) - len(account.password)), password=account.password)
 			else:
-				result = "\033[91m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+				result = "\033[91m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(100 - len(tab) - len(p) - len(account.password)), password=account.password)
 		elif(kwargs["showMatchingNTHash"] and  account.ntHash in kwargs["showMatchingNTHash"]):
 			if(account.status):
-				result = "\033[93m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+				result = "\033[93m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(100 - len(tab) - len(p) - len(account.password)), password=account.password)
 			else:
-				result = "\033[91m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+				result = "\033[91m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(100 - len(tab) - len(p) - len(account.password)), password=account.password)
 		else:
-			result = "{tab}{accInfo}{padding}{password}".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+			result = "{tab}{accInfo}{padding}{password}".format(tab=tab, accInfo=p, padding=" "*(100 - len(tab) - len(p) - len(account.password)), password=account.password)
 	else:
 		if(kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]):
 			if(account.status and account.password):
