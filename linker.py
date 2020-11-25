@@ -125,23 +125,51 @@ def findAccountsWithNTHash(accounts, ntHash, **kwargs):
 	return sorting(result, key=lambda x: x.name, **kwargs)
 
 def showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **kwargs):
-	print("Enabled accounts ({}):".format(len(enabledAcc)))
+	if(kwargs["highlightOnly"]):
+		showOnlyEnabled = len([account for account in enabledAcc if ((kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]) or (kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or (kwargs["showMatchingNTHash"] and  account.ntHash in kwargs["showMatchingNTHash"]))])
+		if(kwargs["showDisabled"]):
+			showOnlyDisabled = len([account for account in disabledAcc if ((kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]) or (kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or (kwargs["showMatchingNTHash"] and  account.ntHash in kwargs["showMatchingNTHash"]))])
+		if(kwargs["showUncracked"]):
+			showOnlyUncracked = len([account for account in uncrackedAcc if ((kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]) or (kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or (kwargs["showMatchingNTHash"] and  account.ntHash in kwargs["showMatchingNTHash"]))])
+
+	if(kwargs["highlightOnly"]):
+		print("Enabled accounts ({}/{}):".format(showOnlyEnabled, len(enabledAcc)))
+	else:
+		print("Enabled accounts ({}):".format(len(enabledAcc)))
 	for account in sorting(enabledAcc, key=attrgetter('domain', 'name'), **kwargs):
-		print(formatResult(account, **kwargs))
+		if(not kwargs["highlightOnly"] or (
+			(kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]) or
+			(kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or 
+			(kwargs["showMatchingNTHash"] and  account.ntHash in kwargs["showMatchingNTHash"]))):
+			print(formatResult(account, **kwargs))
 		
 	print("")
 
 	if(kwargs["showDisabled"]):
-		print("Disabled accounts ({}):".format(len(disabledAcc)))
+		if(kwargs["highlightOnly"]):
+			print("Disabled accounts ({}/{}):".format(showOnlyDisabled, len(disabledAcc)))
+		else:
+			print("Disabled accounts ({}):".format(len(disabledAcc)))
 		for account in sorting(disabledAcc, key=attrgetter('domain', 'name'), **kwargs):
-			print(formatResult(account, **kwargs))
+			if(not kwargs["highlightOnly"] or (
+				(kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]) or
+				(kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or 
+				(kwargs["showMatchingNTHash"] and  account.ntHash in kwargs["showMatchingNTHash"]))):
+				print(formatResult(account, **kwargs))
 	
 		print("")
 
 	if(kwargs["showUncracked"]):
-		print("Uncracked accounts ({}):".format(len(uncrackedAcc)))
+		if(kwargs["highlightOnly"]):
+			print("Uncracked accounts ({}/{}):".format(showOnlyUncracked, len(uncrackedAcc)))
+		else:
+			print("Uncracked accounts ({}):".format(len(uncrackedAcc)))
 		for account in sorting(uncrackedAcc, key=attrgetter('domain', 'name'), **kwargs):
-			print(formatResult(account, **kwargs))
+			if(not kwargs["highlightOnly"] or (
+				(kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]) or
+				(kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or 
+				(kwargs["showMatchingNTHash"] and  account.ntHash in kwargs["showMatchingNTHash"]))):
+				print(formatResult(account, **kwargs))
 	
 		print("")
 
@@ -285,6 +313,7 @@ if __name__=='__main__':
 	parser.add_argument("-P", "--password", dest="showMatchingPassword", help="Show matching password in the result.", action="append", type=str, default=None)
 	parser.add_argument("-N", "--hash", dest="showMatchingNTHash", help="Show matching hash in the result.", action="append", type=str.lower, default=None)
 	parser.add_argument("-U", "--user", dest="highlightUser", help="Highlight matching user in the result.", action="append", type=str.lower, default=None)
+	parser.add_argument("-H", "--highlight-only", dest="highlightOnly", help="Show only highlists results (requires showMatchingDomain, showMatchingPassword, showMatchingNTHash or highlightUser) .", action="store_true")
 	parser.add_argument("-p", "--performance", dest="performance", help="Need more performance? This will NOT sort the results.", action="store_true")
 	parser.add_argument("-t", "--time", dest="time", help="Print the elasped time to run the script.", action="store_true")
 	args = parser.parse_args()
@@ -303,6 +332,13 @@ if __name__=='__main__':
 
 	if(args.highlightUser):
 		args.highlightUser = set(args.highlightUser)
+
+	if(args.highlightOnly):
+		if(args.showMatchingDomain or args.showMatchingPassword or args.showMatchingNTHash or args.highlightUser):
+			args.highlightOnly = True
+		else:
+			args.highlightOnly = False
+
 
 	if(args.all):
 		args.showDisabled = True
