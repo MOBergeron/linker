@@ -132,38 +132,67 @@ def findAccountsWithNTHash(accounts, ntHash, **kwargs):
 	return sorting(result, key=lambda x: x.name, **kwargs)
 
 def showResults(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **kwargs):
-	print("Enabled accounts ({}):".format(len(enabledAcc)))
+	if(kwargs["highlightOnly"]):
+		showOnlyEnabled = len([account for account in enabledAcc if ((kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]) or (kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or (kwargs["showMatchingNTHash"] and  account.ntHash in kwargs["showMatchingNTHash"]))])
+		if(kwargs["showDisabled"]):
+			showOnlyDisabled = len([account for account in disabledAcc if ((kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]) or (kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or (kwargs["showMatchingNTHash"] and  account.ntHash in kwargs["showMatchingNTHash"]))])
+		if(kwargs["showUncracked"]):
+			showOnlyUncrackedEnabled = len([account for account in uncrackedEnAcc if ((kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]) or (kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or (kwargs["showMatchingNTHash"] and  account.ntHash in kwargs["showMatchingNTHash"]))])
+			if(kwargs["showDisabled"]):
+				showOnlyUncrackedDisabled = len([account for account in uncrackedDisAcc if ((kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]) or (kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or (kwargs["showMatchingNTHash"] and  account.ntHash in kwargs["showMatchingNTHash"]))])
+
+	if(kwargs["highlightOnly"]):
+		print("Enabled accounts ({}/{}):".format(showOnlyEnabled, len(enabledAcc)))
+	else:
+		print("Enabled accounts ({}):".format(len(enabledAcc)))
 	for account in sorting(enabledAcc, key=attrgetter('domain', 'name'), **kwargs):
-		r = formatResult(account, **kwargs)
-		if(r):
-			print(r)
+		if(not kwargs["highlightOnly"] or (
+			(kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]) or
+			(kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or 
+			(kwargs["showMatchingNTHash"] and  account.ntHash in kwargs["showMatchingNTHash"]))):
+			print(formatResult(account, **kwargs))
 		
 	print("")
 
 	if(kwargs["showDisabled"]):
-		print("Disabled accounts ({}):".format(len(disabledAcc)))
+		if(kwargs["highlightOnly"]):
+			print("Disabled accounts ({}/{}):".format(showOnlyDisabled, len(disabledAcc)))
+		else:
+			print("Disabled accounts ({}):".format(len(disabledAcc)))
 		for account in sorting(disabledAcc, key=attrgetter('domain', 'name'), **kwargs):
-			r = formatResult(account, **kwargs)
-			if(r):
-				print(r)
+			if(not kwargs["highlightOnly"] or (
+				(kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]) or
+				(kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or 
+				(kwargs["showMatchingNTHash"] and  account.ntHash in kwargs["showMatchingNTHash"]))):
+				print(formatResult(account, **kwargs))
 	
 		print("")
 
 	if(kwargs["showUncracked"]):
-		print("Uncracked enabled accounts ({}):".format(len(uncrackedEnAcc)))
+		if(kwargs["highlightOnly"]):
+			print("Uncracked enabled accounts ({}/{}):".format(showOnlyUncrackedEnabled, len(uncrackedEnAcc)))
+		else:
+			print("Uncracked enabled accounts ({}):".format(len(uncrackedEnAcc)))
 		for account in sorting(uncrackedEnAcc, key=attrgetter('domain', 'name'), **kwargs):
-			r = formatResult(account, **kwargs)
-			if(r):
-				print(r)
+			if(not kwargs["highlightOnly"] or (
+				(kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]) or
+				(kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or 
+				(kwargs["showMatchingNTHash"] and  account.ntHash in kwargs["showMatchingNTHash"]))):
+				print(formatResult(account, **kwargs))
 
 		print("")
 
 		if(kwargs["showDisabled"]):
-			print("Uncracked disabled accounts ({}):".format(len(uncrackedDisAcc)))
+			if(kwargs["highlightOnly"]):
+				print("Uncracked disabled accounts ({}/{}):".format(showOnlyUncrackedDisabled, len(uncrackedDisAcc)))
+			else:
+				print("Uncracked disabled accounts ({}):".format(len(uncrackedDisAcc)))
 			for account in sorting(uncrackedDisAcc, key=attrgetter('domain', 'name'), **kwargs):
-				r = formatResult(account, **kwargs)
-				if(r):
-					print(r)
+				if(not kwargs["highlightOnly"] or (
+					(kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]) or
+					(kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or 
+					(kwargs["showMatchingNTHash"] and  account.ntHash in kwargs["showMatchingNTHash"]))):
+					print(formatResult(account, **kwargs))
 		
 			print("")
 
@@ -212,6 +241,7 @@ def showResults(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwo
 		nbUncrackedEnabled = Decimal(len(uncrackedEnAcc))
 		nbUncrackedDisabled = Decimal(len(uncrackedDisAcc))
 		nbUncracked = Decimal(len(uncrackedEnAcc) + len(uncrackedDisAcc))
+		nbCracked = nbEnabled+nbDisabled
 		totalEnabled = nbEnabled+nbUncrackedEnabled
 		totalDisabled = nbDisabled+nbUncrackedDisabled
 		total = nbEnabled+nbDisabled+nbUncracked
@@ -225,29 +255,30 @@ def showResults(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwo
 
 			print("Statistics:")
 			print("{tab}Enabled Accounts".format(tab=tab))
-			print("{tab}Number of enabled (en):{padding}{percent}".format(tab=tab*2, padding=" "*(50-27-len(tab)-len(str(nbEnabled))), percent=nbEnabled))
-			print("{tab}Number of uncracked enabled (ue):{padding}{percent}".format(tab=tab*2, padding=" "*(50-37-len(tab)-len(str(nbUncrackedEnabled))), percent=nbUncrackedEnabled))
-			print("{tab}Total of enabled (te=en+ue):{padding}{percent}".format(tab=tab*2, padding=" "*(50-32-len(tab)-len(str(totalEnabled))), percent=totalEnabled))
-			print("{tab}Percentage of cracked (en/te):{padding}{percent}%".format(tab=tab*2, padding=" "*(50-34-len(tab)-len(str(pCrackedEnabled))-1), percent=pCrackedEnabled))
+			print("{tab}Number of enabled (en):{padding}{percent}".format(tab=tab*2, padding=" "*(70-27-len(tab)-len(str(nbEnabled))), percent=nbEnabled))
+			print("{tab}Number of uncracked enabled (ue):{padding}{percent}".format(tab=tab*2, padding=" "*(70-37-len(tab)-len(str(nbUncrackedEnabled))), percent=nbUncrackedEnabled))
+			print("{tab}Total of enabled (te=en+ue):{padding}{percent}".format(tab=tab*2, padding=" "*(70-32-len(tab)-len(str(totalEnabled))), percent=totalEnabled))
+			print("{tab}Percentage of cracked (en/te):{padding}{percent}%".format(tab=tab*2, padding=" "*(70-34-len(tab)-len(str(pCrackedEnabled))-1), percent=pCrackedEnabled))
 			print("")
 			print("{tab}Disabled Accounts".format(tab=tab))
-			print("{tab}Number of disabled (dis):{padding}{percent}".format(tab=tab*2, padding=" "*(50-29-len(tab)-len(str(nbDisabled))), percent=nbDisabled))
-			print("{tab}Number of uncracked disabled (ud):{padding}{percent}".format(tab=tab*2, padding=" "*(50-38-len(tab)-len(str(nbUncrackedDisabled))), percent=nbUncrackedDisabled))
-			print("{tab}Total of disabled (td=dis+ud):{padding}{percent}".format(tab=tab*2, padding=" "*(50-34-len(tab)-len(str(totalDisabled))), percent=totalDisabled))
-			print("{tab}Percentage of cracked (dis/td):{padding}{percent}%".format(tab=tab*2, padding=" "*(50-35-len(tab)-len(str(pCrackedDisabled))-1), percent=pCrackedDisabled))
+			print("{tab}Number of disabled (dis):{padding}{percent}".format(tab=tab*2, padding=" "*(70-29-len(tab)-len(str(nbDisabled))), percent=nbDisabled))
+			print("{tab}Number of uncracked disabled (ud):{padding}{percent}".format(tab=tab*2, padding=" "*(70-38-len(tab)-len(str(nbUncrackedDisabled))), percent=nbUncrackedDisabled))
+			print("{tab}Total of disabled (td=dis+ud):{padding}{percent}".format(tab=tab*2, padding=" "*(70-34-len(tab)-len(str(totalDisabled))), percent=totalDisabled))
+			print("{tab}Percentage of cracked (dis/td):{padding}{percent}%".format(tab=tab*2, padding=" "*(70-35-len(tab)-len(str(pCrackedDisabled))-1), percent=pCrackedDisabled))
 			print("")
-			print("{tab}All Accounts".format(tab=tab))
-			print("{tab}Number of uncracked (uc=ue+ud):{padding}{percent}".format(tab=tab*2, padding=" "*(50-35-len(tab)-len(str(nbUncracked))), percent=nbUncracked))
-			print("{tab}Total (t=en+dis+uc):{padding}{percent}".format(tab=tab*2, padding=" "*(50-24-len(tab)-len(str(total))), percent=total))
-			print("{tab}Percentage of cracked (en/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(50-33-len(tab)-len(str(pCracked))-1), percent=pCracked))
-			print("{tab}Percentage of cracked (dis/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(50-34-len(tab)-len(str(pDisCracked))-1), percent=pDisCracked))
-			print("{tab}Percentage of cracked ((en+dis)/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(50-39-len(tab)-len(str(pTotalCracked))-1), percent=pTotalCracked))
+			print("{tab}Every Account".format(tab=tab))
+			print("{tab}Number of cracked (c=en+dis):{padding}{percent}".format(tab=tab*2, padding=" "*(70-33-len(tab)-len(str(nbCracked))), percent=nbCracked))
+			print("{tab}Number of uncracked (uc=ue+ud):{padding}{percent}".format(tab=tab*2, padding=" "*(70-35-len(tab)-len(str(nbUncracked))), percent=nbUncracked))
+			print("{tab}Total (t=c+uc):{padding}{percent}".format(tab=tab*2, padding=" "*(70-19-len(tab)-len(str(total))), percent=total))
+			print("{tab}Percentage of cracked (en/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(70-33-len(tab)-len(str(pCracked))-1), percent=pCracked))
+			print("{tab}Percentage of cracked (dis/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(70-34-len(tab)-len(str(pDisCracked))-1), percent=pDisCracked))
+			print("{tab}Percentage of cracked ((en+dis)/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(70-39-len(tab)-len(str(pTotalCracked))-1), percent=pTotalCracked))
 			print("")
 			print("{tab}Password count:".format(tab=tab))
 
 			for k, v in dict(sorting(passwordCount.items(), key=lambda x: x[1], reverse=True, **kwargs)).items():
 				if(v > 1):
-					print("{tab}{password}{padding}{value}".format(tab=tab*2, password=k, padding=" "*(50-len(tab*2) - len(k) - len(str(v))), value=v))
+					print("{tab}{password}{padding}{value}".format(tab=tab*2, password=k, padding=" "*(70-len(tab*2) - len(k) - len(str(v))), value=v))
 
 			print("")
 		else:
@@ -270,21 +301,21 @@ def formatResult(account, showPassword=True, **kwargs):
 	if(showPassword and account.password):
 		if(kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]):
 			if(account.status):
-				result = "\033[92m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+				result = "\033[92m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(100 - len(tab) - len(p) - len(account.password)), password=account.password)
 			else:
-				result = "\033[91m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+				result = "\033[91m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(100 - len(tab) - len(p) - len(account.password)), password=account.password)
 		elif(kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]):
 			if(account.status):
-				result = "\033[93m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+				result = "\033[93m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(100 - len(tab) - len(p) - len(account.password)), password=account.password)
 			else:
-				result = "\033[91m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+				result = "\033[91m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(100 - len(tab) - len(p) - len(account.password)), password=account.password)
 		elif(kwargs["showMatchingNTHash"] and  account.ntHash in kwargs["showMatchingNTHash"]):
 			if(account.status):
-				result = "\033[93m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+				result = "\033[93m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(100 - len(tab) - len(p) - len(account.password)), password=account.password)
 			else:
-				result = "\033[91m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
-		elif(not kwargs["showOnlyHighlights"]):
-			result = "{tab}{accInfo}{padding}{password}".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
+				result = "\033[91m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(100 - len(tab) - len(p) - len(account.password)), password=account.password)
+		else:
+			result = "{tab}{accInfo}{padding}{password}".format(tab=tab, accInfo=p, padding=" "*(100 - len(tab) - len(p) - len(account.password)), password=account.password)
 	else:
 		if(kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]):
 			if(account.status and account.password):
@@ -301,7 +332,7 @@ def formatResult(account, showPassword=True, **kwargs):
 				result = "\033[92m{tab}{accInfo}\033[00m".format(tab=tab, accInfo=p)
 			else:
 				result = "\033[91m{tab}{accInfo}\033[00m".format(tab=tab, accInfo=p)
-		elif(not kwargs["showOnlyHighlights"]):
+		else:
 			result = "{tab}{accInfo}".format(tab=tab, accInfo=p)
 
 	return result
@@ -324,11 +355,11 @@ if __name__=='__main__':
 	parser.add_argument("-n", "--nthash", dest="showNTHash", help="Show NTHash in the result.", action="store_true")
 	parser.add_argument("-d", "--showdomain", dest="showDomain", help="Show domain in the result.", action="store_true")
 	parser.add_argument("-s", "--stats", dest="showStats", help="Show statistics in the result.", action="store_true")
-	parser.add_argument("-H", "--highlights", dest="showOnlyHighlights", help="Show only highlights in the result.", action="store_true")
 	parser.add_argument("-D", "--domain", dest="showMatchingDomain", help="Show only matching domain  (can be one domain or a file splitted by newline).", type=str.upper, default=None)
 	parser.add_argument("-P", "--password", dest="showMatchingPassword", help="Show matching password in the result. (can be one password or a file splitted by newline)", type=str, default=None)
-	parser.add_argument("-N", "--hash", dest="showMatchingNTHash", help="Show matching hash in the result (can be one hash or a file splitted by newline).", type=str.lower, default=None)
-	parser.add_argument("-U", "--user", dest="highlightUser", help="Highlight matching user in the result (can be one user or a file splitted by newline).", type=str.lower, default=None)
+	parser.add_argument("-N", "--hash", dest="showMatchingNTHash", help="Show matching hash in the result (can be one hash or a file splitted by newline).", type=str.lower,default=None)
+	parser.add_argument("-U", "--user", dest="highlightUser", help="Highlight matching user in the result (can be one user or a file splitted by newline).", type=str.lower,default=None)
+	parser.add_argument("-H", "--highlight-only", dest="highlightOnly", help="Show only highlists results (requires showMatchingDomain, showMatchingPassword, showMatchingNTHash or highlightUser).", action="store_true")
 	parser.add_argument("-p", "--performance", dest="performance", help="Need more performance? This will NOT sort the results.", action="store_true")
 	parser.add_argument("-t", "--time", dest="time", help="Print the elasped time to run the script.", action="store_true")
 	args = parser.parse_args()
@@ -363,6 +394,13 @@ if __name__=='__main__':
 				args.highlightUser = f.read().split("\n")
 		else:
 			args.highlightUser = [args.highlightUser]
+
+	if(args.highlightOnly):
+		if(args.showMatchingDomain or args.showMatchingPassword or args.showMatchingNTHash or args.highlightUser):
+			args.highlightOnly = True
+		else:
+			args.highlightOnly = False
+
 
 	if(args.all):
 		args.showDisabled = True
