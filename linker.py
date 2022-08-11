@@ -4,11 +4,12 @@ import re
 import argparse
 
 from time import time
+from binascii import unhexlify
 from operator import attrgetter
 from decimal import getcontext, Decimal
 
 tab = " "*4
-hashesRegex = re.compile("((?P<domain>[^\\\\]+)\\\\)?(?P<accName>[^:\\\\\\$]+)(?P<machine>\\$)?:\\d+:[a-fA-F0-9]{32}:(?P<ntHash>[a-fA-F0-9]{32})::: ?(\\(status=(?P<accStatus>Dis|En)abled)\\)?")
+hashesRegex = re.compile("((?P<domain>[^\\\\]+)\\\\)?(?P<accName>[^:\$]+)(?P<machine>\$)?:\d+:[a-fA-F0-9]{32}:(?P<ntHash>[a-fA-F0-9]{32}):::(\s*\(status=(?P<accStatus>Dis|En)abled\))?")
 
 class Account(object):
 	def __init__(self, name, ntHash, status=True, domain=""):
@@ -21,6 +22,8 @@ class Account(object):
 	def findPassword(self, cracked):
 		if(self.ntHash in cracked):
 			self.password = cracked[self.ntHash]
+			if(self.password.startswith("$HEX[") and self.password.endswith("]")):
+				self.password = unhexlify(self.password[5:-1]).decode("latin-1")
 
 		return self.password is not None
 	
@@ -45,7 +48,7 @@ def getContent(dump, cracked, **kwargs):
 			else:
 				accName = None
 				ntHash = None
-				accStatus = None
+				accStatus = True
 				domain = ""
 				machine = False
 				if(match.group("accName")):
@@ -58,8 +61,8 @@ def getContent(dump, cracked, **kwargs):
 				
 				if(match.group("ntHash")):
 					ntHash = match.group("ntHash").lower()
-				if(match.group("accStatus")):
-					accStatus = True if match.group("accStatus") == "En" else False
+				if(match.group("accStatus") == "Dis"):
+					accStatus = False
 				if(match.group("domain")):
 					domain = match.group("domain").upper()
 
@@ -83,7 +86,8 @@ def getContent(dump, cracked, **kwargs):
 def correlation(accounts, crackedDict, **kwargs):
 	enabledAcc = set()
 	disabledAcc = set()
-	uncrackedAcc = set()
+	uncrackedEnAcc = set()
+	uncrackedDisAcc = set()
 	passwordCount = {}
 
 	for account in accounts:
@@ -102,9 +106,12 @@ def correlation(accounts, crackedDict, **kwargs):
 			else:
 				disabledAcc.add(account)
 		elif(kwargs["showStats"] or kwargs["showUncracked"]):
-			uncrackedAcc.add(account)
+			if(account.status):
+				uncrackedEnAcc.add(account)
+			else:
+				uncrackedDisAcc.add(account)
 	
-	return enabledAcc, disabledAcc, uncrackedAcc, passwordCount
+	return enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount
 
 def findAccountsWithPassword(accounts, password, **kwargs):
 	result = set()
@@ -124,26 +131,41 @@ def findAccountsWithNTHash(accounts, ntHash, **kwargs):
 
 	return sorting(result, key=lambda x: x.name, **kwargs)
 
-def showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **kwargs):
+def showResults(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **kwargs):
 	print("Enabled accounts ({}):".format(len(enabledAcc)))
 	for account in sorting(enabledAcc, key=attrgetter('domain', 'name'), **kwargs):
-		print(formatResult(account, **kwargs))
+		r = formatResult(account, **kwargs)
+		if(r):
+			print(r)
 		
 	print("")
 
 	if(kwargs["showDisabled"]):
 		print("Disabled accounts ({}):".format(len(disabledAcc)))
 		for account in sorting(disabledAcc, key=attrgetter('domain', 'name'), **kwargs):
-			print(formatResult(account, **kwargs))
+			r = formatResult(account, **kwargs)
+			if(r):
+				print(r)
 	
 		print("")
 
 	if(kwargs["showUncracked"]):
-		print("Uncracked accounts ({}):".format(len(uncrackedAcc)))
-		for account in sorting(uncrackedAcc, key=attrgetter('domain', 'name'), **kwargs):
-			print(formatResult(account, **kwargs))
-	
+		print("Uncracked enabled accounts ({}):".format(len(uncrackedEnAcc)))
+		for account in sorting(uncrackedEnAcc, key=attrgetter('domain', 'name'), **kwargs):
+			r = formatResult(account, **kwargs)
+			if(r):
+				print(r)
+
 		print("")
+
+		if(kwargs["showDisabled"]):
+			print("Uncracked disabled accounts ({}):".format(len(uncrackedDisAcc)))
+			for account in sorting(uncrackedDisAcc, key=attrgetter('domain', 'name'), **kwargs):
+				r = formatResult(account, **kwargs)
+				if(r):
+					print(r)
+		
+			print("")
 
 	if(kwargs["showMatchingPassword"]):
 		accounts = enabledAcc.copy()
@@ -156,7 +178,9 @@ def showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **kwargs):
 			if(result):
 				print("Accounts with password {}".format(password))
 				for account in result:
-					print(formatResult(account, False, **kwargs))
+					r = formatResult(account, False, **kwargs)
+					if(r):
+						print(r)
 			else:
 				if(kwargs["showDisabled"]):
 					print("No account found with password {}".format(password))
@@ -166,14 +190,16 @@ def showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **kwargs):
 			print("")
 
 	if(kwargs["showMatchingNTHash"]):
-		accounts = enabledAcc.union(disabledAcc, uncrackedAcc)
+		accounts = enabledAcc.union(disabledAcc, uncrackedEnAcc, uncrackedDisAcc)
 		
 		for ntHash in sorting(kwargs["showMatchingNTHash"], **kwargs):
 			result = findAccountsWithNTHash(accounts, ntHash, **kwargs)
 			if(result):
 				print("Accounts with NTHash {}".format(ntHash))
 				for account in result:
-					print(formatResult(account, False, **kwargs))
+					r = formatResult(account, False, **kwargs)
+					if(r):
+						print(r)
 			else:
 				print("No account found with NTHash {}".format(ntHash))
 
@@ -183,23 +209,39 @@ def showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **kwargs):
 		getcontext().prec = 4
 		nbEnabled = Decimal(len(enabledAcc))
 		nbDisabled = Decimal(len(disabledAcc))
-		nbUncracked = Decimal(len(uncrackedAcc))
-		total = nbUncracked+nbEnabled+nbDisabled
+		nbUncrackedEnabled = Decimal(len(uncrackedEnAcc))
+		nbUncrackedDisabled = Decimal(len(uncrackedDisAcc))
+		nbUncracked = Decimal(len(uncrackedEnAcc) + len(uncrackedDisAcc))
+		totalEnabled = nbEnabled+nbUncrackedEnabled
+		totalDisabled = nbDisabled+nbUncrackedDisabled
+		total = nbEnabled+nbDisabled+nbUncracked
 
 		if(total > 0):
 			pCracked = Decimal((nbEnabled/total)*100)
+			pCrackedEnabled = Decimal((nbEnabled/totalEnabled)*100)
+			pCrackedDisabled = Decimal((nbDisabled/totalDisabled)*100)
 			pDisCracked = Decimal((nbDisabled/total)*100)
 			pTotalCracked = Decimal(((nbEnabled+nbDisabled)/total)*100)
 
 			print("Statistics:")
-			print("{tab}Number of enabled (en):{padding}{percent}".format(tab=tab, padding=" "*(50-23-len(tab)-len(str(nbEnabled))), percent=nbEnabled))
-			print("{tab}Number of disabled (dis):{padding}{percent}".format(tab=tab, padding=" "*(50-25-len(tab)-len(str(nbDisabled))), percent=nbDisabled))
-			print("{tab}Number of uncracked (uc):{padding}{percent}".format(tab=tab, padding=" "*(50-25-len(tab)-len(str(nbUncracked))), percent=nbUncracked))
-			print("{tab}Total (en + dis + un):{padding}{percent}".format(tab=tab, padding=" "*(50-22-len(tab)-len(str(total))), percent=total))
+			print("{tab}Enabled Accounts".format(tab=tab))
+			print("{tab}Number of enabled (en):{padding}{percent}".format(tab=tab*2, padding=" "*(50-27-len(tab)-len(str(nbEnabled))), percent=nbEnabled))
+			print("{tab}Number of uncracked enabled (ue):{padding}{percent}".format(tab=tab*2, padding=" "*(50-37-len(tab)-len(str(nbUncrackedEnabled))), percent=nbUncrackedEnabled))
+			print("{tab}Total of enabled (te=en+ue):{padding}{percent}".format(tab=tab*2, padding=" "*(50-32-len(tab)-len(str(totalEnabled))), percent=totalEnabled))
+			print("{tab}Percentage of cracked (en/te):{padding}{percent}%".format(tab=tab*2, padding=" "*(50-34-len(tab)-len(str(pCrackedEnabled))-1), percent=pCrackedEnabled))
 			print("")
-			print("{tab}Percentage of cracked (en):{padding}{percent}%".format(tab=tab, padding=" "*(50-27-len(tab)-len(str(pCracked))-1), percent=pCracked))
-			print("{tab}Percentage of cracked (dis):{padding}{percent}%".format(tab=tab, padding=" "*(50-28-len(tab)-len(str(pDisCracked))-1), percent=pDisCracked))
-			print("{tab}Percentage of cracked (en+dis):{padding}{percent}%".format(tab=tab, padding=" "*(50-31-len(tab)-len(str(pTotalCracked))-1), percent=pTotalCracked))
+			print("{tab}Disabled Accounts".format(tab=tab))
+			print("{tab}Number of disabled (dis):{padding}{percent}".format(tab=tab*2, padding=" "*(50-29-len(tab)-len(str(nbDisabled))), percent=nbDisabled))
+			print("{tab}Number of uncracked disabled (ud):{padding}{percent}".format(tab=tab*2, padding=" "*(50-38-len(tab)-len(str(nbUncrackedDisabled))), percent=nbUncrackedDisabled))
+			print("{tab}Total of disabled (td=dis+ud):{padding}{percent}".format(tab=tab*2, padding=" "*(50-34-len(tab)-len(str(totalDisabled))), percent=totalDisabled))
+			print("{tab}Percentage of cracked (dis/td):{padding}{percent}%".format(tab=tab*2, padding=" "*(50-35-len(tab)-len(str(pCrackedDisabled))-1), percent=pCrackedDisabled))
+			print("")
+			print("{tab}All Accounts".format(tab=tab))
+			print("{tab}Number of uncracked (uc=ue+ud):{padding}{percent}".format(tab=tab*2, padding=" "*(50-35-len(tab)-len(str(nbUncracked))), percent=nbUncracked))
+			print("{tab}Total (t=en+dis+uc):{padding}{percent}".format(tab=tab*2, padding=" "*(50-24-len(tab)-len(str(total))), percent=total))
+			print("{tab}Percentage of cracked (en/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(50-33-len(tab)-len(str(pCracked))-1), percent=pCracked))
+			print("{tab}Percentage of cracked (dis/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(50-34-len(tab)-len(str(pDisCracked))-1), percent=pDisCracked))
+			print("{tab}Percentage of cracked ((en+dis)/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(50-39-len(tab)-len(str(pTotalCracked))-1), percent=pTotalCracked))
 			print("")
 			print("{tab}Password count:".format(tab=tab))
 
@@ -213,6 +255,7 @@ def showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **kwargs):
 
 def formatResult(account, showPassword=True, **kwargs):
 	p = ""
+	result = ""
 	if(kwargs["showDomain"] and account.domain):
 		p += account.domain
 		p += "\\"
@@ -240,7 +283,7 @@ def formatResult(account, showPassword=True, **kwargs):
 				result = "\033[93m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
 			else:
 				result = "\033[91m{tab}{accInfo}{padding}{password}\033[00m".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
-		else:
+		elif(not kwargs["showOnlyHighlights"]):
 			result = "{tab}{accInfo}{padding}{password}".format(tab=tab, accInfo=p, padding=" "*(80 - len(tab) - len(p) - len(account.password)), password=account.password)
 	else:
 		if(kwargs["highlightUser"] and account.name.lower() in kwargs["highlightUser"]):
@@ -258,7 +301,7 @@ def formatResult(account, showPassword=True, **kwargs):
 				result = "\033[92m{tab}{accInfo}\033[00m".format(tab=tab, accInfo=p)
 			else:
 				result = "\033[91m{tab}{accInfo}\033[00m".format(tab=tab, accInfo=p)
-		else:
+		elif(not kwargs["showOnlyHighlights"]):
 			result = "{tab}{accInfo}".format(tab=tab, accInfo=p)
 
 	return result
@@ -281,10 +324,11 @@ if __name__=='__main__':
 	parser.add_argument("-n", "--nthash", dest="showNTHash", help="Show NTHash in the result.", action="store_true")
 	parser.add_argument("-d", "--showdomain", dest="showDomain", help="Show domain in the result.", action="store_true")
 	parser.add_argument("-s", "--stats", dest="showStats", help="Show statistics in the result.", action="store_true")
-	parser.add_argument("-D", "--domain", dest="showMatchingDomain", help="Show only matching domain.\nMultiple -d flag can be used.\nExample: -d foo.lan -d bar.lan", type=str.upper, action="append", default=None)
-	parser.add_argument("-P", "--password", dest="showMatchingPassword", help="Show matching password in the result.", action="append", type=str, default=None)
-	parser.add_argument("-N", "--hash", dest="showMatchingNTHash", help="Show matching hash in the result.", action="append", type=str.lower, default=None)
-	parser.add_argument("-U", "--user", dest="highlightUser", help="Highlight matching user in the result.", action="append", type=str.lower, default=None)
+	parser.add_argument("-H", "--highlights", dest="showOnlyHighlights", help="Show only highlights in the result.", action="store_true")
+	parser.add_argument("-D", "--domain", dest="showMatchingDomain", help="Show only matching domain  (can be one domain or a file splitted by newline).", type=str.upper, default=None)
+	parser.add_argument("-P", "--password", dest="showMatchingPassword", help="Show matching password in the result. (can be one password or a file splitted by newline)", type=str, default=None)
+	parser.add_argument("-N", "--hash", dest="showMatchingNTHash", help="Show matching hash in the result (can be one hash or a file splitted by newline).", type=str.lower, default=None)
+	parser.add_argument("-U", "--user", dest="highlightUser", help="Highlight matching user in the result (can be one user or a file splitted by newline).", type=str.lower, default=None)
 	parser.add_argument("-p", "--performance", dest="performance", help="Need more performance? This will NOT sort the results.", action="store_true")
 	parser.add_argument("-t", "--time", dest="time", help="Print the elasped time to run the script.", action="store_true")
 	args = parser.parse_args()
@@ -293,16 +337,32 @@ if __name__=='__main__':
 		startTime = Decimal(time())
 
 	if(args.showMatchingDomain):
-		args.showMatchingDomain = set(args.showMatchingDomain)
+		if(os.path.isfile(args.showMatchingDomain)):
+			with open(args.showMatchingDomain, 'r') as f:
+				args.showMatchingDomain = f.read().split("\n")
+		else:
+			args.showMatchingDomain = [args.showMatchingDomain]
 
 	if(args.showMatchingPassword):
-		args.showMatchingPassword = set(args.showMatchingPassword)
+		if(os.path.isfile(args.showMatchingPassword)):
+			with open(args.showMatchingPassword, 'r') as f:
+				args.showMatchingPassword = f.read().split("\n")
+		else:
+			args.showMatchingPassword = [args.showMatchingPassword]
 
 	if(args.showMatchingNTHash):
-		args.showMatchingNTHash = set(args.showMatchingNTHash)
+		if(os.path.isfile(args.showMatchingNTHash)):
+			with open(args.showMatchingNTHash, 'r') as f:
+				args.showMatchingNTHash = f.read().split("\n")
+		else:
+			args.showMatchingNTHash = [args.showMatchingNTHash]
 
 	if(args.highlightUser):
-		args.highlightUser = set(args.highlightUser)
+		if(os.path.isfile(args.highlightUser)):
+			with open(args.highlightUser, 'r') as f:
+				args.highlightUser = f.read().split("\n")
+		else:
+			args.highlightUser = [args.highlightUser]
 
 	if(args.all):
 		args.showDisabled = True
@@ -316,8 +376,8 @@ if __name__=='__main__':
 	if(args.cracked and (not os.path.exists(args.cracked) or not os.path.isfile(args.cracked))):
 		raise FileNotFoundError("{} was not found.".format(args.cracked))
 
-	(enabledAcc, disabledAcc, uncrackedAcc, passwordCount) = correlation(*getContent(**vars(args)), **vars(args))
-	showResults(enabledAcc, disabledAcc, uncrackedAcc, passwordCount, **vars(args))
+	(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount) = correlation(*getContent(**vars(args)), **vars(args))
+	showResults(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **vars(args))
 
 	if(args.time or args.verbose):
 		endTime = Decimal(time())
