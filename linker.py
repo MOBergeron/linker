@@ -278,14 +278,13 @@ def showMatchingNTHashesFile(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedD
 			print("")
 
 def showPasswordReuse(enabledAcc, disabledAcc, passwordCount, **kwargs):
-	if(kwargs["showPasswordReuse"]):
+	if(kwargs["showPasswordReuse"] and kwargs["showPasswordReuse"] > 1):
 		accounts = enabledAcc.copy()
 		
 		if(kwargs["showDisabled"]):
 			accounts = accounts.union(disabledAcc)
 		
 		for password, count in dict(sorting(passwordCount.items(), key=lambda x: x[1][True] + x[1][False], reverse=True, **kwargs)).items():
-
 			if(((kwargs["showDisabled"] and count[True] + count[False] > 1) or (not kwargs["showDisabled"] and count[True] > 1)) and (kwargs["showPasswordReuse"] == -1 or count[True] + count[False] <= kwargs["showPasswordReuse"])):
 				result = findAccountsWithPassword(accounts, password, **kwargs)
 				if(result):
@@ -520,7 +519,7 @@ if __name__=='__main__':
 	if(args.showPasswordReuse):
 		if(args.showPasswordReuse == "all"):
 			args.showPasswordReuse = -1
-		elif(args.showPasswordReuse.isnumeric() and int(args.showPasswordReuse) > 1):
+		elif(args.showPasswordReuse.isnumeric()):
 			args.showPasswordReuse = int(args.showPasswordReuse)
 		else:
 			raise ValueError("'{}' is not an integer or 'all'.".format(args.showPasswordReuse))
@@ -533,7 +532,7 @@ if __name__=='__main__':
 		args.showNTHash = True
 		args.showDomain = True
 		args.showStats = True
-		args.showPasswordReuse = 2 if not args.showPasswordReuse else args.showPasswordReuse
+		args.showPasswordReuse = 2 if args.showPasswordReuse is None else args.showPasswordReuse
 
 	if(args.dump and (not os.path.exists(args.dump) or not os.path.isfile(args.dump))):
 		raise FileNotFoundError("{} was not found.".format(args.dump))
