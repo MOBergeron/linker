@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import re
+from sys import maxsize as INT_MAXSIZE
 import argparse
 import decimal
 
@@ -520,13 +521,16 @@ if __name__=='__main__':
 
 	if(args.showPasswordReuse):
 		if(args.showPasswordReuse == "all"):
-			args.showPasswordReuse = -1
+			args.showPasswordReuse = INT_MAXSIZE
 		elif(args.showPasswordReuse.isnumeric()):
 			args.showPasswordReuse = int(args.showPasswordReuse)
 		else:
 			raise ValueError("'{}' is not an integer or 'all'.".format(args.showPasswordReuse))
 	else:
-		args.showPasswordReuse = False
+		if(args.all): 
+			args.showPasswordReuse = INT_MAXSIZE
+		else:
+			args.showPasswordReuse = False
 
 	if(args.all):
 		args.showDisabled = True
@@ -534,7 +538,7 @@ if __name__=='__main__':
 		args.showNTHash = True
 		args.showDomain = True
 		args.showStats = True
-		args.showPasswordReuse = 2 if args.showPasswordReuse is None else args.showPasswordReuse
+		args.showPasswordReuse = INT_MAXSIZE if args.showPasswordReuse is None else args.showPasswordReuse
 
 	if(args.dump and (not os.path.exists(args.dump) or not os.path.isfile(args.dump))):
 		raise FileNotFoundError("{} was not found.".format(args.dump))
