@@ -11,6 +11,7 @@ from operator import attrgetter
 
 tab = " "*4
 hashesRegex = re.compile("((?P<domain>[^\\\\]+)\\\\)?(?P<accName>[^:\$]+)(?P<machine>\$)?:\d+:[a-fA-F0-9]{32}:(?P<ntHash>[a-fA-F0-9]{32}):::(\s*\(status=(?P<accStatus>Dis|En)abled\))?")
+ntHashRegex = re.compile("^([a-fA-F0-9]{32})$")
 
 class Account(object):
 	def __init__(self, name, ntHash, status=True, domain=""):
@@ -110,6 +111,9 @@ def correlation(accounts, crackedDict, **kwargs):
 			else:
 				disabledAcc.add(account)
 		elif(kwargs["showStats"] or kwargs["showUncracked"]):
+			if(not account.ntHash in passwordCount):
+				passwordCount[account.ntHash] = {True:0, False:0}
+			passwordCount[account.ntHash][account.status] += 1
 			if(account.status):
 				uncrackedEnAcc.add(account)
 			else:
@@ -155,7 +159,7 @@ def showResults(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwo
 	showMatchingPassword(enabledAcc, disabledAcc, **kwargs)
 	showMatchingNTHash(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, **kwargs)
 	showMatchingNTHashesFile(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, **kwargs)
-	showPasswordReuse(enabledAcc, disabledAcc, passwordCount, **kwargs)
+	showPasswordReuse(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **kwargs)
 	statistics(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **kwargs)
 
 def showEnabledAccounts(enabledAcc, showOnlyEnabled, **kwargs):
@@ -280,18 +284,30 @@ def showMatchingNTHashesFile(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedD
 
 			print("")
 
-def showPasswordReuse(enabledAcc, disabledAcc, passwordCount, **kwargs):
+def showPasswordReuse(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **kwargs):
 	if(kwargs["showPasswordReuse"] and kwargs["showPasswordReuse"] > 1):
 		accounts = enabledAcc.copy()
 		
+		if(kwargs["showUncracked"]):
+			accounts = accounts.union(uncrackedEnAcc)
+
 		if(kwargs["showDisabled"]):
 			accounts = accounts.union(disabledAcc)
-		
+
+			if(kwargs["showUncracked"]):
+				accounts = accounts.union(uncrackedDisAcc)
+
 		for password, count in dict(sorting(passwordCount.items(), key=lambda x: x[1][True] + x[1][False], reverse=True, **kwargs)).items():
 			if(((kwargs["showDisabled"] and count[True] + count[False] > 1) or (not kwargs["showDisabled"] and count[True] > 1)) and (kwargs["showPasswordReuse"] == -1 or count[True] + count[False] <= kwargs["showPasswordReuse"])):
-				result = findAccountsWithPassword(accounts, password, **kwargs)
+				if(ntHashRegex.match(password)):
+					result = findAccountsWithNTHash(accounts, password, **kwargs)
+				else:
+					result = findAccountsWithPassword(accounts, password, **kwargs)
 				if(result):
-					print("Possible password reuse for password {}".format(password))
+					if(ntHashRegex.match(password)):
+						print("Possible password reuse for hash {}".format(password))
+					else:
+						print("Possible password reuse for password {}".format(password))
 					for account in result:
 						r = formatResult(account, False, showPasswordReusePassword=password, **kwargs)
 						if(r):
@@ -347,9 +363,9 @@ def statistics(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwor
 			print("{tab}Percentage of cracked ((en+dis)/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-39-len(tab)-len(str(pTotalCracked))-1), percent=pTotalCracked))
 			print("")
 			if(kwargs["showDisabled"]):
-				print("{tab}Password count (en/t):".format(tab=tab))
+				print("{tab}Password/hash count (en/t):".format(tab=tab))
 			else:
-				print("{tab}Password count:".format(tab=tab))
+				print("{tab}Password/hash count:".format(tab=tab))
 
 			for k, v in dict(sorting(passwordCount.items(), key=lambda x: x[1][True] + x[1][False], reverse=True, **kwargs)).items():
 				if(kwargs["showDisabled"]):
@@ -363,7 +379,7 @@ def statistics(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwor
 					else:
 						continue
 				
-				print("{tab}{password}{padding}{value}".format(tab=tab*2, password=k, padding=" "*(spacing-len(tab*2) - len(k) - len(value)), value=value))
+				print("{tab}{isHash}{password}{padding}{value}".format(tab=tab*2, isHash="[hash] " if ntHashRegex.match(k) else "", password=k, padding=" "*(spacing-len(tab*2) - len(k) - len(value) - (len("[hash] ") if ntHashRegex.match(k) else 0)), value=value))
 
 			print("")
 		else:
