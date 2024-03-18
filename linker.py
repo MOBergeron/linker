@@ -10,7 +10,7 @@ from binascii import unhexlify
 from operator import attrgetter
 
 tab = " "*4
-hashesRegex = re.compile("((?P<domain>[^\\\\]+)\\\\)?(?P<accName>[^:\$]+)(?P<machine>\$)?:\d+:[a-fA-F0-9]{32}:(?P<ntHash>[a-fA-F0-9]{32}):::(\s*\(status=(?P<accStatus>Dis|En)abled\))?")
+hashesRegex = re.compile("((?P<domain>[^\\\\]+)\\\\)?(?P<accName>[^:\$]+)(?P<machine>\$)?:\d+:[a-fA-F0-9]{32}:(?P<ntHash>[a-fA-F0-9]{32}):::(\s*\(pwdLastSet=(?P<accPwdLastSet>[^\)]+)\))?(\s*\(status=(?P<accStatus>Dis|En)abled\))?")
 ntHashRegex = re.compile("^([a-fA-F0-9]{32})$")
 
 class Account(object):
@@ -65,6 +65,8 @@ def getContent(dump, cracked, **kwargs):
 					ntHash = match.group("ntHash")
 				if(match.group("accStatus") == "Dis"):
 					accStatus = False
+				if(match.group("accPwdLastSet")):
+					pass
 				if(match.group("domain")):
 					domain = match.group("domain")
 
