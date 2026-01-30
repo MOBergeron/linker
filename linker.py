@@ -379,70 +379,91 @@ def showPasswordReuse(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, 
 
 				print("")
 
+def _print_stats_block(enabled, disabled, uncracked_en, uncracked_dis, spacing, block_title=None, **kwargs):
+	"""Print one stats block (current or historical). Uses only the provided sets; never mixes in other data."""
+	nbEnabled = decimal.Decimal(len(enabled))
+	nbDisabled = decimal.Decimal(len(disabled))
+	nbUncrackedEnabled = decimal.Decimal(len(uncracked_en))
+	nbUncrackedDisabled = decimal.Decimal(len(uncracked_dis))
+	nbUncracked = nbUncrackedEnabled + nbUncrackedDisabled
+	nbCracked = nbEnabled + nbDisabled
+	totalEnabled = nbEnabled + nbUncrackedEnabled
+	totalDisabled = nbDisabled + nbUncrackedDisabled
+	total = nbEnabled + nbDisabled + nbUncracked
+	if total <= 0:
+		return
+	decimal.getcontext().prec = 4
+	pCrackedEnabled = decimal.Decimal((nbEnabled / totalEnabled) * 100) if totalEnabled != 0 else 0
+	pCrackedDisabled = decimal.Decimal((nbDisabled / totalDisabled) * 100) if totalDisabled != 0 else 0
+	pCracked = decimal.Decimal((nbEnabled / total) * 100)
+	pDisCracked = decimal.Decimal((nbDisabled / total) * 100)
+	pTotalCracked = decimal.Decimal(((nbEnabled + nbDisabled) / total) * 100)
+	section = (block_title + "\n") if block_title else ""
+	print(section + "{tab}Enabled Accounts".format(tab=tab))
+	print("{tab}Number of cracked enabled (en):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-35-len(tab)-len(str(nbEnabled))), percent=nbEnabled))
+	print("{tab}Number of uncracked enabled (ue):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-37-len(tab)-len(str(nbUncrackedEnabled))), percent=nbUncrackedEnabled))
+	print("{tab}Total of enabled (te=en+ue):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-32-len(tab)-len(str(totalEnabled))), percent=totalEnabled))
+	print("{tab}Percentage of cracked (en/te):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-34-len(tab)-len(str(pCrackedEnabled))-1), percent=pCrackedEnabled))
+	print("")
+	print("{tab}Disabled Accounts".format(tab=tab))
+	print("{tab}Number of cracked disabled (dis):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-37-len(tab)-len(str(nbDisabled))), percent=nbDisabled))
+	print("{tab}Number of uncracked disabled (ud):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-38-len(tab)-len(str(nbUncrackedDisabled))), percent=nbUncrackedDisabled))
+	print("{tab}Total of disabled (td=dis+ud):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-34-len(tab)-len(str(totalDisabled))), percent=totalDisabled))
+	print("{tab}Percentage of cracked (dis/td):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-35-len(tab)-len(str(pCrackedDisabled))-1), percent=pCrackedDisabled))
+	print("")
+	print("{tab}Every Account".format(tab=tab))
+	print("{tab}Number of cracked (c=en+dis):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-33-len(tab)-len(str(nbCracked))), percent=nbCracked))
+	print("{tab}Number of uncracked (uc=ue+ud):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-35-len(tab)-len(str(nbUncracked))), percent=nbUncracked))
+	print("{tab}Total (t=c+uc):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-19-len(tab)-len(str(total))), percent=total))
+	print("{tab}Percentage of cracked (en/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-33-len(tab)-len(str(pCracked))-1), percent=pCracked))
+	print("{tab}Percentage of cracked (dis/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-34-len(tab)-len(str(pDisCracked))-1), percent=pDisCracked))
+	print("{tab}Percentage of cracked ((en+dis)/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-39-len(tab)-len(str(pTotalCracked))-1), percent=pTotalCracked))
+
+
 def statistics(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **kwargs):
-	if(kwargs["showStats"]):
-		spacing = 55
-		nbEnabled = decimal.Decimal(len(enabledAcc))
-		nbDisabled = decimal.Decimal(len(disabledAcc))
-		nbUncrackedEnabled = decimal.Decimal(len(uncrackedEnAcc))
-		nbUncrackedDisabled = decimal.Decimal(len(uncrackedDisAcc))
-		nbUncracked = decimal.Decimal(len(uncrackedEnAcc) + len(uncrackedDisAcc))
-		nbCracked = nbEnabled+nbDisabled
-		totalEnabled = nbEnabled+nbUncrackedEnabled
-		totalDisabled = nbDisabled+nbUncrackedDisabled
-		total = nbEnabled+nbDisabled+nbUncracked
+	if not kwargs["showStats"]:
+		return
+	spacing = 55
+	# Split by entry type: current-only for main stats, history-only for historical subsection (never mixed)
+	enabled_current = {a for a in enabledAcc if a.entry_type == Account.ENTRY_CURRENT}
+	disabled_current = {a for a in disabledAcc if a.entry_type == Account.ENTRY_CURRENT}
+	uncracked_en_current = {a for a in uncrackedEnAcc if a.entry_type == Account.ENTRY_CURRENT}
+	uncracked_dis_current = {a for a in uncrackedDisAcc if a.entry_type == Account.ENTRY_CURRENT}
+	enabled_history = {a for a in enabledAcc if a.entry_type == Account.ENTRY_HISTORY}
+	disabled_history = {a for a in disabledAcc if a.entry_type == Account.ENTRY_HISTORY}
+	uncracked_en_history = {a for a in uncrackedEnAcc if a.entry_type == Account.ENTRY_HISTORY}
+	uncracked_dis_history = {a for a in uncrackedDisAcc if a.entry_type == Account.ENTRY_HISTORY}
 
-		if(total > 0):
-			decimal.getcontext().prec = 4
-			pCracked = decimal.Decimal((nbEnabled/total)*100)
-			pCrackedEnabled = decimal.Decimal((nbEnabled/totalEnabled)*100) if totalEnabled != 0 else 0
-			pCrackedDisabled = decimal.Decimal((nbDisabled/totalDisabled)*100) if totalDisabled != 0 else 0
-			pDisCracked = decimal.Decimal((nbDisabled/total)*100)
-			pTotalCracked = decimal.Decimal(((nbEnabled+nbDisabled)/total)*100)
-
-			print("Statistics:")
-			print("{tab}Enabled Accounts".format(tab=tab))
-			print("{tab}Number of cracked enabled (en):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-35-len(tab)-len(str(nbEnabled))), percent=nbEnabled))
-			print("{tab}Number of uncracked enabled (ue):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-37-len(tab)-len(str(nbUncrackedEnabled))), percent=nbUncrackedEnabled))
-			print("{tab}Total of enabled (te=en+ue):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-32-len(tab)-len(str(totalEnabled))), percent=totalEnabled))
-			print("{tab}Percentage of cracked (en/te):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-34-len(tab)-len(str(pCrackedEnabled))-1), percent=pCrackedEnabled))
-			print("")
-			print("{tab}Disabled Accounts".format(tab=tab))
-			print("{tab}Number of cracked disabled (dis):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-37-len(tab)-len(str(nbDisabled))), percent=nbDisabled))
-			print("{tab}Number of uncracked disabled (ud):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-38-len(tab)-len(str(nbUncrackedDisabled))), percent=nbUncrackedDisabled))
-			print("{tab}Total of disabled (td=dis+ud):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-34-len(tab)-len(str(totalDisabled))), percent=totalDisabled))
-			print("{tab}Percentage of cracked (dis/td):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-35-len(tab)-len(str(pCrackedDisabled))-1), percent=pCrackedDisabled))
-			print("")
-			print("{tab}Every Account".format(tab=tab))
-			print("{tab}Number of cracked (c=en+dis):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-33-len(tab)-len(str(nbCracked))), percent=nbCracked))
-			print("{tab}Number of uncracked (uc=ue+ud):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-35-len(tab)-len(str(nbUncracked))), percent=nbUncracked))
-			print("{tab}Total (t=c+uc):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-19-len(tab)-len(str(total))), percent=total))
-			print("{tab}Percentage of cracked (en/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-33-len(tab)-len(str(pCracked))-1), percent=pCracked))
-			print("{tab}Percentage of cracked (dis/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-34-len(tab)-len(str(pDisCracked))-1), percent=pDisCracked))
-			print("{tab}Percentage of cracked ((en+dis)/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-39-len(tab)-len(str(pTotalCracked))-1), percent=pTotalCracked))
-			print("")
-			if(kwargs["showDisabled"]):
-				print("{tab}Password/hash count (en/t):".format(tab=tab))
-			else:
-				print("{tab}Password/hash count:".format(tab=tab))
-
-			for k, v in dict(sorting(passwordCount.items(), key=lambda x: x[1][True] + x[1][False], reverse=True, **kwargs)).items():
-				if(kwargs["showDisabled"]):
-					if(v[True] + v[False] > 1):
-						value = "{}/{}".format(v[True], v[True] + v[False])
-					else:
-						continue
-				else:
-					if(v[True] > 1): 
-						value = str(v[True])
-					else:
-						continue
-				
-				print("{tab}{isHash}{password}{padding}{value}".format(tab=tab*2, isHash="[hash] " if ntHashRegex.match(k) else "", password=k, padding=" "*(spacing-len(tab*2) - len(k) - len(value) - (len("[hash] ") if ntHashRegex.match(k) else 0)), value=value))
-
-			print("")
+	total_current = len(enabled_current) + len(disabled_current) + len(uncracked_en_current) + len(uncracked_dis_current)
+	if total_current > 0:
+		print("Statistics:")
+		_print_stats_block(enabled_current, disabled_current, uncracked_en_current, uncracked_dis_current, spacing, **kwargs)
+		print("")
+		if kwargs["showDisabled"]:
+			print("{tab}Password/hash count (en/t):".format(tab=tab))
 		else:
-			print("Can't show stats if the total number of accounts is 0...")
+			print("{tab}Password/hash count:".format(tab=tab))
+		for k, v in dict(sorting(passwordCount.items(), key=lambda x: x[1][True] + x[1][False], reverse=True, **kwargs)).items():
+			if kwargs["showDisabled"]:
+				if v[True] + v[False] > 1:
+					value = "{}/{}".format(v[True], v[True] + v[False])
+				else:
+					continue
+			else:
+				if v[True] > 1:
+					value = str(v[True])
+				else:
+					continue
+			print("{tab}{isHash}{password}{padding}{value}".format(tab=tab*2, isHash="[hash] " if ntHashRegex.match(k) else "", password=k, padding=" "*(spacing-len(tab*2) - len(k) - len(value) - (len("[hash] ") if ntHashRegex.match(k) else 0)), value=value))
+		print("")
+	else:
+		print("Can't show stats if the total number of accounts is 0...")
+
+	total_history = len(enabled_history) + len(disabled_history) + len(uncracked_en_history) + len(uncracked_dis_history)
+	if total_history > 0:
+		print("Statistics (historical data only):")
+		_print_stats_block(enabled_history, disabled_history, uncracked_en_history, uncracked_dis_history, spacing, **kwargs)
+		print("")
 
 def formatResult(account, showPassword=True, **kwargs):
 	p = ""
