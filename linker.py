@@ -4,90 +4,93 @@ import re
 from sys import maxsize as INT_MAXSIZE
 import argparse
 import decimal
+from collections import defaultdict
+from math import log2
 
 from time import time
-from binascii import unhexlify
 from operator import attrgetter
 
+from account import Account
+from parsers import ntHashRegex
+from parsers import SecretsDumpParser, CrackedHashesParser
+
 tab = " "*4
-hashesRegex = re.compile("((?P<domain>[^\\\\]+)\\\\)?(?P<accName>[^:\$]+)(?P<machine>\$)?:\d+:[a-fA-F0-9]{32}:(?P<ntHash>[a-fA-F0-9]{32}):::(\s*\(pwdLastSet=(?P<accPwdLastSet>[^\)]+)\))?(\s*\(status=(?P<accStatus>Dis|En)abled\))?")
-ntHashRegex = re.compile("^([a-fA-F0-9]{32})$")
 
-class Account(object):
-	def __init__(self, name, ntHash, status=True, domain=""):
-		self.name = name.lower()
-		self.ntHash = ntHash.lower()
-		self.status = status
-		self.domain = domain.upper()
-		self.password = None
 
-	def findPassword(self, cracked):
-		if(self.ntHash in cracked):
-			self.password = cracked[self.ntHash]
-			if(self.password.startswith("$HEX[") and self.password.endswith("]")):
-				self.password = unhexlify(self.password[5:-1]).decode("latin-1")
+def getContent(dump, cracked, verbose=False):
+	parser = SecretsDumpParser(skip_machine_accounts=True)
+	accounts = parser.parse_file(dump, verbose=verbose)
 
-		return self.password is not None
-	
-	def __repr__(self):
-		return "{}".format(self.name)
+	parser = CrackedHashesParser()
+	crackedData = parser.parse_file(cracked, verbose=verbose)
 
-	def __str__(self):
-		return "{}".format(self.name)
-		
-def getContent(dump, cracked, **kwargs):
-	with open(dump,'r') as f:
-		accounts = set()
-		content = set(f.read().split("\n"))
-		for line in content:
-			if(not line):
-				continue
-			match = hashesRegex.match(line)
-			if(not match):
-				if(kwargs["verbose"]):
-					print("Error parsing: {}".format(line))
-				continue
-			else:
-				accName = None
-				ntHash = None
-				accStatus = True
-				domain = ""
-				machine = False
-				if(match.group("accName")):
-					accName = match.group("accName")
-				
-				if(match.group("machine")):
-					if(kwargs["verbose"]):
-						print("Skipping machine account: {}".format(accName))
-					continue
-				
-				if(match.group("ntHash")):
-					ntHash = match.group("ntHash")
-				if(match.group("accStatus") == "Dis"):
-					accStatus = False
-				if(match.group("accPwdLastSet")):
-					pass
-				if(match.group("domain")):
-					domain = match.group("domain")
+	return accounts, crackedData
 
-				accounts.add(Account(name=accName, ntHash=ntHash, status=accStatus, domain=domain))
 
-		f.close()
+def group_accounts_by_id(accounts):
+	"""Group accounts by id. Each group is sorted: current entry first, then history0, history1, ..."""
+	groups = defaultdict(list)
+	for acc in accounts:
+		groups[acc.id].append(acc)
+	for id in groups:
+		# Sort: current (entry_index None) first, then history by index
+		groups[id].sort(key=lambda a: (a.entry_index is not None, a.entry_index or 0))
+	return dict(groups)
 
-	with open(cracked,'r') as f:
-		crackedDict = {}
-		content = set(f.read().split("\n"))
-		for line in content:
-			if(not line):
-				continue
-			h, p = line.split(":",1)
-			if(not h.lower() in crackedDict):
-				crackedDict[h.lower()] = p
-		f.close()
 
-		crackedDict['31d6cfe0d16ae931b73c59d7e0c089c0'] = '[Empty Password]'
+def _shannon_entropy(s):
+	"""Shannon entropy in bits per character (0 = no diversity, log2(256) ≈ 8 for random bytes)."""
+	if not s:
+		return 0.0
+	freq = defaultdict(int)
+	for c in s:
+		freq[c] += 1
+	length = len(s)
+	return -sum((count / length) * log2(count / length) for count in freq.values())
 
-	return accounts, crackedDict
+
+def _evaluate_password_patterns(entries, entropyThreshold):
+	"""
+	entries: list of (entry_label, password) for cracked entries only.
+	Returns (is_predictable, pattern_description) or (False, None).
+	Uses Shannon entropy: low entropy = predictable.
+	"""
+	if len(entries) < 2:
+		return False, None
+	passwords = [p for (_, p) in entries]
+	entropies = [_shannon_entropy(p) for p in passwords]
+	avg_entropy = sum(entropies) / len(entropies)
+	if avg_entropy < entropyThreshold:
+		return True, "low entropy password history (avg {:.1f} bits/char, threshold {:.1f})".format(
+			avg_entropy, entropyThreshold
+		)
+	return False, None
+
+
+def find_predictable_pattern_accounts(accounts, crackedDict, entropyThreshold):
+	"""Group by id, resolve passwords, evaluate patterns. kwargs may contain entropyThreshold."""
+	"""Group by id, resolve passwords, evaluate patterns. Returns list of (account_id, base_name, domain, pattern_desc, entries_with_passwords)."""
+	for acc in accounts:
+		acc.findPassword(crackedDict)
+	groups = group_accounts_by_id(accounts)
+	results = []
+	for acc_id, acc_list in groups.items():
+		if len(acc_list) < 2:
+			continue
+		entries = []
+		for acc in acc_list:
+			if acc.password is not None:
+				label = "current" if acc.entry_type == Account.ENTRY_CURRENT else "history{}".format(acc.entry_index)
+				entries.append((label, acc.password))
+		if len(entries) < 2:
+			continue
+		predictable, desc = _evaluate_password_patterns(entries, entropyThreshold=entropyThreshold)
+		if predictable:
+			base_name = acc_list[0].base_name
+			domain = acc_list[0].domain
+			results.append((acc_id, base_name, domain, desc, entries))
+	return results
+
 
 def correlation(accounts, crackedDict, **kwargs):
 	enabledAcc = set()
@@ -141,94 +144,109 @@ def findAccountsWithNTHash(accounts, ntHash, **kwargs):
 
 	return sorting(result, key=lambda x: x.name, **kwargs)
 
-def showResults(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **kwargs):
+def _highlight_match(account, kwargs):
+	return (
+		(kwargs.get("highlightUser") and kwargs["highlightUser"].match(account.name)) or
+		(kwargs.get("highlightUsersFile") and account.name in kwargs["highlightUsersFile"]) or
+		(kwargs.get("showMatchingPassword") and account.password in kwargs["showMatchingPassword"]) or
+		(kwargs.get("showMatchingNTHash") and kwargs["showMatchingNTHash"].match(account.ntHash)) or
+		(kwargs.get("showMatchingNTHashesFile") and account.ntHash in kwargs["showMatchingNTHashesFile"])
+	)
+
+def showResults(allAccounts, crackedDict, enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **kwargs):
 	showOnlyEnabled = 0
 	showOnlyDisabled = 0
 	showOnlyUncrackedEnabled = 0
 	showOnlyUncrackedDisabled = 0
 	if(kwargs["highlightOnly"]):
-		showOnlyEnabled = len([account for account in enabledAcc if ((kwargs["highlightUser"] and kwargs["highlightUser"].match(account.name)) or (kwargs["highlightUsersFile"] and account.name in kwargs["highlightUsersFile"]) or (kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or (kwargs["showMatchingNTHash"] and  kwargs["showMatchingNTHash"].match(account.ntHash)) or (kwargs["showMatchingNTHashesFile"] and account.ntHash in kwargs["showMatchingNTHashesFile"]))])
+		showOnlyEnabled = len([a for a in enabledAcc if _highlight_match(a, kwargs)])
 		if(kwargs["showDisabled"]):
-			showOnlyDisabled = len([account for account in disabledAcc if ((kwargs["highlightUser"] and kwargs["highlightUser"].match(account.name)) or (kwargs["highlightUsersFile"] and account.name in kwargs["highlightUsersFile"]) or (kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or (kwargs["showMatchingNTHash"] and  kwargs["showMatchingNTHash"].match(account.ntHash)) or (kwargs["showMatchingNTHashesFile"] and account.ntHash in kwargs["showMatchingNTHashesFile"]))])
+			showOnlyDisabled = len([a for a in disabledAcc if _highlight_match(a, kwargs)])
 		if(kwargs["showUncracked"]):
-			showOnlyUncrackedEnabled = len([account for account in uncrackedEnAcc if ((kwargs["highlightUser"] and kwargs["highlightUser"].match(account.name)) or (kwargs["highlightUsersFile"] and account.name in kwargs["highlightUsersFile"]) or (kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or (kwargs["showMatchingNTHash"] and  kwargs["showMatchingNTHash"].match(account.ntHash)) or (kwargs["showMatchingNTHashesFile"] and account.ntHash in kwargs["showMatchingNTHashesFile"]))])
+			showOnlyUncrackedEnabled = len([a for a in uncrackedEnAcc if _highlight_match(a, kwargs)])
 			if(kwargs["showDisabled"]):
-				showOnlyUncrackedDisabled = len([account for account in uncrackedDisAcc if ((kwargs["highlightUser"] and kwargs["highlightUser"].match(account.name)) or (kwargs["highlightUsersFile"] and account.name in kwargs["highlightUsersFile"]) or (kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or (kwargs["showMatchingNTHash"] and  kwargs["showMatchingNTHash"].match(account.ntHash)) or (kwargs["showMatchingNTHashesFile"] and account.ntHash in kwargs["showMatchingNTHashesFile"]))])
-	
-	showEnabledAccounts(enabledAcc, showOnlyEnabled, **kwargs)
-	showDisabledAccounts(disabledAcc, showOnlyDisabled, **kwargs)
-	showUncrackedAccounts(uncrackedEnAcc, showOnlyUncrackedEnabled, uncrackedDisAcc, showOnlyUncrackedDisabled, **kwargs)
+				showOnlyUncrackedDisabled = len([a for a in uncrackedDisAcc if _highlight_match(a, kwargs)])
+
+	if kwargs.get("includeHistory"):
+		enabled_current = {a for a in enabledAcc if a.entry_type == Account.ENTRY_CURRENT}
+		enabled_history = {a for a in enabledAcc if a.entry_type == Account.ENTRY_HISTORY}
+		disabled_current = {a for a in disabledAcc if a.entry_type == Account.ENTRY_CURRENT}
+		disabled_history = {a for a in disabledAcc if a.entry_type == Account.ENTRY_HISTORY}
+		showOnlyEnabledCurrent = len([a for a in enabled_current if _highlight_match(a, kwargs)]) if kwargs["highlightOnly"] else 0
+		showOnlyEnabledHistory = len([a for a in enabled_history if _highlight_match(a, kwargs)]) if kwargs["highlightOnly"] else 0
+		showOnlyDisabledCurrent = len([a for a in disabled_current if _highlight_match(a, kwargs)]) if kwargs["highlightOnly"] else 0
+		showOnlyDisabledHistory = len([a for a in disabled_history if _highlight_match(a, kwargs)]) if kwargs["highlightOnly"] else 0
+		showEnabledAccounts(enabled_current, showOnlyEnabledCurrent, section_title="Enabled accounts", **kwargs)
+		showEnabledAccounts(enabled_history, showOnlyEnabledHistory, section_title="Enabled accounts history", **kwargs)
+		showDisabledAccounts(disabled_current, showOnlyDisabledCurrent, section_title="Disabled accounts", **kwargs)
+		showDisabledAccounts(disabled_history, showOnlyDisabledHistory, section_title="Disabled accounts history", **kwargs)
+	else:
+		showEnabledAccounts(enabledAcc, showOnlyEnabled, **kwargs)
+		showDisabledAccounts(disabledAcc, showOnlyDisabled, **kwargs)
+
+	if kwargs.get("includeHistory") and kwargs["showUncracked"]:
+		uncracked_en_current = {a for a in uncrackedEnAcc if a.entry_type == Account.ENTRY_CURRENT}
+		uncracked_en_history = {a for a in uncrackedEnAcc if a.entry_type == Account.ENTRY_HISTORY}
+		uncracked_dis_current = {a for a in uncrackedDisAcc if a.entry_type == Account.ENTRY_CURRENT}
+		uncracked_dis_history = {a for a in uncrackedDisAcc if a.entry_type == Account.ENTRY_HISTORY}
+		showOnlyUncrackedEnCurrent = len([a for a in uncracked_en_current if _highlight_match(a, kwargs)]) if kwargs["highlightOnly"] else 0
+		showOnlyUncrackedEnHistory = len([a for a in uncracked_en_history if _highlight_match(a, kwargs)]) if kwargs["highlightOnly"] else 0
+		showOnlyUncrackedDisCurrent = len([a for a in uncracked_dis_current if _highlight_match(a, kwargs)]) if kwargs["highlightOnly"] else 0
+		showOnlyUncrackedDisHistory = len([a for a in uncracked_dis_history if _highlight_match(a, kwargs)]) if kwargs["highlightOnly"] else 0
+		_showUncrackedSection(uncracked_en_current, showOnlyUncrackedEnCurrent, "Uncracked enabled accounts", **kwargs)
+		_showUncrackedSection(uncracked_en_history, showOnlyUncrackedEnHistory, "Uncracked enabled accounts history", **kwargs)
+		_showUncrackedSection(uncracked_dis_current, showOnlyUncrackedDisCurrent, "Uncracked disabled accounts", **kwargs)
+		_showUncrackedSection(uncracked_dis_history, showOnlyUncrackedDisHistory, "Uncracked disabled accounts history", **kwargs)
+	else:
+		showUncrackedAccounts(uncrackedEnAcc, showOnlyUncrackedEnabled, uncrackedDisAcc, showOnlyUncrackedDisabled, **kwargs)
 	showMatchingPassword(enabledAcc, disabledAcc, **kwargs)
 	showMatchingNTHash(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, **kwargs)
 	showMatchingNTHashesFile(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, **kwargs)
 	showPasswordReuse(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **kwargs)
+	showPredictablePatterns(allAccounts, crackedDict, **kwargs)
 	statistics(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **kwargs)
 
-def showEnabledAccounts(enabledAcc, showOnlyEnabled, **kwargs):
+def showEnabledAccounts(enabledAcc, showOnlyEnabled, section_title=None, **kwargs):
+	title = section_title if section_title is not None else "Enabled accounts"
 	if(kwargs["highlightOnly"]):
-		print("Enabled accounts ({}/{}):".format(showOnlyEnabled, len(enabledAcc)))
+		print("{} ({}/{}):".format(title, showOnlyEnabled, len(enabledAcc)))
 	else:
-		print("Enabled accounts ({}):".format(len(enabledAcc)))
+		print("{} ({}):".format(title, len(enabledAcc)))
 	for account in sorting(enabledAcc, key=attrgetter('domain', 'name'), **kwargs):
-		if(not kwargs["highlightOnly"] or (
-			(kwargs["highlightUser"] and kwargs["highlightUser"].match(account.name)) or
-			(kwargs["highlightUsersFile"] and account.name in kwargs["highlightUsersFile"]) or
-			(kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or 
-			(kwargs["showMatchingNTHash"] and  kwargs["showMatchingNTHash"].match(account.ntHash)) or 
-			(kwargs["showMatchingNTHashesFile"] and account.ntHash in kwargs["showMatchingNTHashesFile"]))):
+		if(not kwargs["highlightOnly"] or _highlight_match(account, kwargs)):
 			print(formatResult(account, **kwargs))
-		
 	print("")
 
-def showDisabledAccounts(disabledAcc, showOnlyDisabled, **kwargs):
-	if(kwargs["showDisabled"]):
+def showDisabledAccounts(disabledAcc, showOnlyDisabled, section_title=None, **kwargs):
+	title = section_title if section_title is not None else "Disabled accounts"
+	show_section = kwargs["showDisabled"] or kwargs.get("includeHistory")
+	if show_section:
 		if(kwargs["highlightOnly"]):
-			print("Disabled accounts ({}/{}):".format(showOnlyDisabled, len(disabledAcc)))
+			print("{} ({}/{}):".format(title, showOnlyDisabled, len(disabledAcc)))
 		else:
-			print("Disabled accounts ({}):".format(len(disabledAcc)))
+			print("{} ({}):".format(title, len(disabledAcc)))
 		for account in sorting(disabledAcc, key=attrgetter('domain', 'name'), **kwargs):
-			if(not kwargs["highlightOnly"] or (
-				(kwargs["highlightUser"] and kwargs["highlightUser"].match(account.name)) or
-				(kwargs["highlightUsersFile"] and account.name in kwargs["highlightUsersFile"]) or
-				(kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or 
-				(kwargs["showMatchingNTHash"] and  kwargs["showMatchingNTHash"].match(account.ntHash)) or 
-				(kwargs["showMatchingNTHashesFile"] and account.ntHash in kwargs["showMatchingNTHashesFile"]))):
+			if(not kwargs["highlightOnly"] or _highlight_match(account, kwargs)):
 				print(formatResult(account, **kwargs))
-	
 		print("")
+
+def _showUncrackedSection(acc_set, showOnlyCount, section_title, **kwargs):
+	"""Print a single uncracked section (title + account list)."""
+	if kwargs["highlightOnly"]:
+		print("{} ({}/{}):".format(section_title, showOnlyCount, len(acc_set)))
+	else:
+		print("{} ({}):".format(section_title, len(acc_set)))
+	for account in sorting(acc_set, key=attrgetter('domain', 'name'), **kwargs):
+		if not kwargs["highlightOnly"] or _highlight_match(account, kwargs):
+			print(formatResult(account, **kwargs))
+	print("")
+
 
 def showUncrackedAccounts(uncrackedEnAcc, showOnlyUncrackedEnabled, uncrackedDisAcc, showOnlyUncrackedDisabled, **kwargs):
-	if(kwargs["showUncracked"]):
-		if(kwargs["highlightOnly"]):
-			print("Uncracked enabled accounts ({}/{}):".format(showOnlyUncrackedEnabled, len(uncrackedEnAcc)))
-		else:
-			print("Uncracked enabled accounts ({}):".format(len(uncrackedEnAcc)))
-		for account in sorting(uncrackedEnAcc, key=attrgetter('domain', 'name'), **kwargs):
-			if(not kwargs["highlightOnly"] or (
-				(kwargs["highlightUser"] and kwargs["highlightUser"].match(account.name)) or
-				(kwargs["highlightUsersFile"] and account.name in kwargs["highlightUsersFile"]) or
-				(kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or 
-				(kwargs["showMatchingNTHash"] and  kwargs["showMatchingNTHash"].match(account.ntHash)) or 
-				(kwargs["showMatchingNTHashesFile"] and account.ntHash in kwargs["showMatchingNTHashesFile"]))):
-				print(formatResult(account, **kwargs))
-
-		print("")
-
-		if(kwargs["showDisabled"]):
-			if(kwargs["highlightOnly"]):
-				print("Uncracked disabled accounts ({}/{}):".format(showOnlyUncrackedDisabled, len(uncrackedDisAcc)))
-			else:
-				print("Uncracked disabled accounts ({}):".format(len(uncrackedDisAcc)))
-			for account in sorting(uncrackedDisAcc, key=attrgetter('domain', 'name'), **kwargs):
-				if(not kwargs["highlightOnly"] or (
-					(kwargs["highlightUser"] and kwargs["highlightUser"].match(account.name)) or
-					(kwargs["highlightUsersFile"] and account.name in kwargs["highlightUsersFile"]) or
-					(kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or 
-					(kwargs["showMatchingNTHash"] and  kwargs["showMatchingNTHash"].match(account.ntHash)) or 
-					(kwargs["showMatchingNTHashesFile"] and account.ntHash in kwargs["showMatchingNTHashesFile"]))):
-					print(formatResult(account, **kwargs))
-		
-			print("")
+	if kwargs["showUncracked"]:
+		_showUncrackedSection(uncrackedEnAcc, showOnlyUncrackedEnabled, "Uncracked enabled accounts", **kwargs)
+		if kwargs["showDisabled"]:
+			_showUncrackedSection(uncrackedDisAcc, showOnlyUncrackedDisabled, "Uncracked disabled accounts", **kwargs)
 
 def showMatchingPassword(enabledAcc, disabledAcc, **kwargs):
 	if(kwargs["showMatchingPassword"]):
@@ -285,6 +303,26 @@ def showMatchingNTHashesFile(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedD
 				print("No account found with NTHash {}".format(ntHash))
 
 			print("")
+
+def showPredictablePatterns(allAccounts, crackedDict, **kwargs):
+	"""Group accounts by ID, evaluate password history similarity, report predictable patterns."""
+	if not kwargs.get("showPredictablePatterns"):
+		return
+	if not allAccounts or not crackedDict:
+		return
+	results = find_predictable_pattern_accounts(allAccounts, crackedDict, kwargs.get("entropyThreshold"))
+	if not results:
+		print("Predictable password patterns: none detected.")
+		print("")
+		return
+	print("Predictable password patterns ({} account(s)):".format(len(results)))
+	for acc_id, base_name, domain, pattern_desc, entries in sorting(results, key=lambda x: (x[2], x[1]), **kwargs):
+		display = "{}\\{}".format(domain, base_name) if domain else base_name
+		print("{tab}ID {id} ({display}): {desc}".format(tab=tab, id=acc_id, display=display, desc=pattern_desc))
+		for label, pwd in entries:
+			print("{tab}{tab}{label}: {pwd}".format(tab=tab, label=label, pwd=pwd))
+	print("")
+
 
 def showPasswordReuse(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **kwargs):
 	if(kwargs["showPasswordReuse"] and kwargs["showPasswordReuse"] > 1):
@@ -473,6 +511,9 @@ if __name__=='__main__':
 	parser.add_argument("-U", "--user", dest="highlightUser", help="Highlight matching user in the result (regex).", type=str.lower,default=None)
 	parser.add_argument("--users-file", dest="highlightUsersFile", help="Highlight matching users in the result by providing a file splitted by newlines.", type=str,default=None)
 	parser.add_argument("-H", "--highlight-only", dest="highlightOnly", help="Show only highlists results (requires showMatchingDomain, showMatchingPassword, showMatchingNTHash or highlightUser).", action="store_true")
+	parser.add_argument("-pp", "--predictable-patterns", dest="showPredictablePatterns", help="Group accounts by ID, evaluate password history similarity, report users with predictable patterns.", action="store_true")
+	parser.add_argument("-et", "--entropy-threshold", dest="entropyThreshold", type=float, default=3.0, help="Shannon entropy (bits/char) below which password history is flagged as predictable (default: %(default)s).")
+	parser.add_argument("-hi", "--history", dest="includeHistory", help="Include historical password entries (entry_history0, entry_history1, ...) in stats: enabled/disabled/uncracked counts, password reuse, statistics. Default: only current entry per account. Predictable-patterns check always uses history.", action="store_true")
 	parser.add_argument("-p", "--performance", dest="performance", help="Need more performance? This will NOT sort the results.", action="store_true")
 	parser.add_argument("-t", "--time", dest="time", help="Print the elasped time to run the script.", action="store_true")
 	args = parser.parse_args()
@@ -556,6 +597,7 @@ if __name__=='__main__':
 		args.showNTHash = True
 		args.showDomain = True
 		args.showStats = True
+		args.showPredictablePatterns = True
 		args.showPasswordReuse = INT_MAXSIZE if args.showPasswordReuse is None else args.showPasswordReuse
 
 	if(args.dump and (not os.path.exists(args.dump) or not os.path.isfile(args.dump))):
@@ -563,8 +605,12 @@ if __name__=='__main__':
 	if(args.cracked and (not os.path.exists(args.cracked) or not os.path.isfile(args.cracked))):
 		raise FileNotFoundError("{} was not found.".format(args.cracked))
 
-	(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount) = correlation(*getContent(**vars(args)), **vars(args))
-	showResults(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **vars(args))
+	allAccounts, crackedDict = getContent(args.dump, args.cracked, args.verbose)
+	
+	# For stats/correlation: include history only when --history; predictable-patterns always uses full accounts
+	accounts_for_stats = allAccounts if args.includeHistory else {a for a in allAccounts if a.entry_type == Account.ENTRY_CURRENT}
+	(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount) = correlation(accounts_for_stats, crackedDict, **vars(args))
+	showResults(allAccounts, crackedDict, enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **vars(args))
 
 	if(args.time or args.verbose):
 		endTime = decimal.Decimal(time())
