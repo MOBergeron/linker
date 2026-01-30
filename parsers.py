@@ -70,19 +70,45 @@ class SecretsDumpParser(object):
 
 
 class CrackedHashesParser(object):
-	"""Parses hash:password cracked output (e.g. from hashcat/john)."""
+	"""Parses hash:password cracked output (e.g. from hashcat/john).
+	Supports hashcat --username export: username:hash:password and hash:password:username.
+	"""
 
 	EMPTY_PASSWORD_NTHASH = "31d6cfe0d16ae931b73c59d7e0c089c0"
 	EMPTY_PASSWORD_LABEL = "[Empty Password]"
 
 	def parse_line(self, line, verbose=False):
-		"""Parse a single 'hash:password' line. Returns (hash, password) or None."""
+		"""Parse a single line. Returns (hash, password) or None.
+		Accepts: hash:password, username:hash:password, hash:password:username.
+		Password may contain colons; only the 32-char hex Nthash is used as key.
+		"""
 		if not line.strip():
 			return None
-		parts = line.split(":", 1)
-		if len(parts) != 2:
+		parts = line.split(":")
+		if len(parts) < 2:
 			return None
-		return (parts[0].lower(), parts[1])
+		# Normal case: hash:password (password may contain colons)
+		if len(parts) == 2:
+			h, p = parts[0].strip().lower(), parts[1].strip()
+			if len(h) == 32 and ntHashRegex.match(h):
+				return (h, p)
+			return None
+		# 3+ parts: username:hash:password or hash:password:username (password may contain colons)
+		for i, part in enumerate(parts):
+			cand = part.strip().lower()
+			if len(cand) == 32 and ntHashRegex.match(cand):
+				if i == 0:
+					# hash:password:...
+					password = ":".join(p.strip() for p in parts[1:])
+					return (cand, password)
+				if i == 1:
+					# username:hash:password
+					password = ":".join(p.strip() for p in parts[2:])
+					return (cand, password)
+				# hash:password:username (hash later in line)
+				password = ":".join(p.strip() for p in parts[1:i])
+				return (cand, password)
+		return None
 
 	def parse_stream(self, lines, verbose=False):
 		"""Parse an iterable of lines; yields (hash, password) tuples."""

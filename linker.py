@@ -5,7 +5,6 @@ from sys import maxsize as INT_MAXSIZE
 import argparse
 import decimal
 from collections import defaultdict
-from math import log2
 
 from time import time
 from operator import attrgetter
@@ -38,37 +37,56 @@ def group_accounts_by_id(accounts):
 	return dict(groups)
 
 
-def _shannon_entropy(s):
-	"""Shannon entropy in bits per character (0 = no diversity, log2(256) ≈ 8 for random bytes)."""
-	if not s:
-		return 0.0
-	freq = defaultdict(int)
-	for c in s:
-		freq[c] += 1
-	length = len(s)
-	return -sum((count / length) * log2(count / length) for count in freq.values())
+def _damerau_levenshtein_distance(a, b):
+	"""Damerau-Levenshtein edit distance (insert, delete, substitute, transpose)."""
+	if not a:
+		return len(b)
+	if not b:
+		return len(a)
+	# d[i][j] = distance between a[:i] and b[:j]; use two rows for space
+	# d[-1][*] and d[*][-1] are infinity; row 0 is distances from ""
+	prev = list(range(len(b) + 1))
+	for i in range(1, len(a) + 1):
+		curr = [i] + [0] * len(b)
+		for j in range(1, len(b) + 1):
+			cost = 0 if a[i - 1] == b[j - 1] else 1
+			curr[j] = min(
+				curr[j - 1] + 1,
+				prev[j] + 1,
+				prev[j - 1] + cost,
+			)
+			if i >= 2 and j >= 2 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+				curr[j] = min(curr[j], prev[j - 2] + 1)
+		prev = curr
+	return prev[len(b)]
 
 
-def _evaluate_password_patterns(entries, entropyThreshold):
+def _evaluate_password_patterns(entries, dl_threshold):
 	"""
 	entries: list of (entry_label, password) for cracked entries only.
 	Returns (is_predictable, pattern_description) or (False, None).
-	Uses Shannon entropy: low entropy = predictable.
+	Uses Damerau-Levenshtein: low average normalized distance = predictable (passwords too similar).
 	"""
 	if len(entries) < 2:
 		return False, None
 	passwords = [p for (_, p) in entries]
-	entropies = [_shannon_entropy(p) for p in passwords]
-	avg_entropy = sum(entropies) / len(entropies)
-	if avg_entropy < entropyThreshold:
-		return True, "low entropy password history (avg {:.1f} bits/char, threshold {:.1f})".format(
-			avg_entropy, entropyThreshold
+	pairs = [(passwords[i], passwords[j]) for i in range(len(passwords)) for j in range(i + 1, len(passwords))]
+	if not pairs:
+		return False, None
+	distances = []
+	for p1, p2 in pairs:
+		d = _damerau_levenshtein_distance(p1, p2)
+		max_len = max(len(p1), len(p2)) or 1
+		distances.append(d / max_len)
+	avg_norm_dist = sum(distances) / len(distances)
+	if avg_norm_dist < dl_threshold:
+		return True, "predictable password history (avg normalized Damerau-Levenshtein distance {:.2f}, threshold {:.2f})".format(
+			avg_norm_dist, dl_threshold
 		)
 	return False, None
 
 
-def find_predictable_pattern_accounts(accounts, crackedDict, entropyThreshold):
-	"""Group by id, resolve passwords, evaluate patterns. kwargs may contain entropyThreshold."""
+def find_predictable_pattern_accounts(accounts, crackedDict, dl_threshold):
 	"""Group by id, resolve passwords, evaluate patterns. Returns list of (account_id, base_name, domain, pattern_desc, entries_with_passwords)."""
 	for acc in accounts:
 		acc.findPassword(crackedDict)
@@ -84,7 +102,7 @@ def find_predictable_pattern_accounts(accounts, crackedDict, entropyThreshold):
 				entries.append((label, acc.password))
 		if len(entries) < 2:
 			continue
-		predictable, desc = _evaluate_password_patterns(entries, entropyThreshold=entropyThreshold)
+		predictable, desc = _evaluate_password_patterns(entries, dl_threshold=dl_threshold)
 		if predictable:
 			base_name = acc_list[0].base_name
 			domain = acc_list[0].domain
@@ -310,7 +328,8 @@ def showPredictablePatterns(allAccounts, crackedDict, **kwargs):
 		return
 	if not allAccounts or not crackedDict:
 		return
-	results = find_predictable_pattern_accounts(allAccounts, crackedDict, kwargs.get("entropyThreshold"))
+	dl_threshold = kwargs.get("dlThreshold", 0.25)
+	results = find_predictable_pattern_accounts(allAccounts, crackedDict, dl_threshold)
 	if not results:
 		print("Predictable password patterns: none detected.")
 		print("")
@@ -512,7 +531,7 @@ if __name__=='__main__':
 	parser.add_argument("--users-file", dest="highlightUsersFile", help="Highlight matching users in the result by providing a file splitted by newlines.", type=str,default=None)
 	parser.add_argument("-H", "--highlight-only", dest="highlightOnly", help="Show only highlists results (requires showMatchingDomain, showMatchingPassword, showMatchingNTHash or highlightUser).", action="store_true")
 	parser.add_argument("-pp", "--predictable-patterns", dest="showPredictablePatterns", help="Group accounts by ID, evaluate password history similarity, report users with predictable patterns.", action="store_true")
-	parser.add_argument("-et", "--entropy-threshold", dest="entropyThreshold", type=float, default=3.0, help="Shannon entropy (bits/char) below which password history is flagged as predictable (default: %(default)s).")
+	parser.add_argument("-dl", "--dl-threshold", dest="dlThreshold", type=float, default=0.25, help="Max avg normalized Damerau-Levenshtein distance below which password history is flagged as predictable; lower = stricter (default: %(default)s).")
 	parser.add_argument("-hi", "--history", dest="includeHistory", help="Include historical password entries (entry_history0, entry_history1, ...) in stats: enabled/disabled/uncracked counts, password reuse, statistics. Default: only current entry per account. Predictable-patterns check always uses history.", action="store_true")
 	parser.add_argument("-p", "--performance", dest="performance", help="Need more performance? This will NOT sort the results.", action="store_true")
 	parser.add_argument("-t", "--time", dest="time", help="Print the elasped time to run the script.", action="store_true")
