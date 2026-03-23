@@ -4,90 +4,111 @@ import re
 from sys import maxsize as INT_MAXSIZE
 import argparse
 import decimal
+from collections import defaultdict
 
 from time import time
-from binascii import unhexlify
 from operator import attrgetter
 
+from account import Account
+from parsers import ntHashRegex
+from parsers import SecretsDumpParser, CrackedHashesParser
+
 tab = " "*4
-hashesRegex = re.compile("((?P<domain>[^\\\\]+)\\\\)?(?P<accName>[^:\$]+)(?P<machine>\$)?:\d+:[a-fA-F0-9]{32}:(?P<ntHash>[a-fA-F0-9]{32}):::(\s*\(pwdLastSet=(?P<accPwdLastSet>[^\)]+)\))?(\s*\(status=(?P<accStatus>Dis|En)abled\))?")
-ntHashRegex = re.compile("^([a-fA-F0-9]{32})$")
 
-class Account(object):
-	def __init__(self, name, ntHash, status=True, domain=""):
-		self.name = name.lower()
-		self.ntHash = ntHash.lower()
-		self.status = status
-		self.domain = domain.upper()
-		self.password = None
 
-	def findPassword(self, cracked):
-		if(self.ntHash in cracked):
-			self.password = cracked[self.ntHash]
-			if(self.password.startswith("$HEX[") and self.password.endswith("]")):
-				self.password = unhexlify(self.password[5:-1]).decode("latin-1")
+def getContent(dump, cracked, verbose=False):
+	parser = SecretsDumpParser(skip_machine_accounts=True)
+	accounts = parser.parse_file(dump, verbose=verbose)
 
-		return self.password is not None
-	
-	def __repr__(self):
-		return "{}".format(self.name)
+	parser = CrackedHashesParser()
+	crackedData = parser.parse_file(cracked, verbose=verbose)
 
-	def __str__(self):
-		return "{}".format(self.name)
-		
-def getContent(dump, cracked, **kwargs):
-	with open(dump,'r') as f:
-		accounts = set()
-		content = set(f.read().split("\n"))
-		for line in content:
-			if(not line):
-				continue
-			match = hashesRegex.match(line)
-			if(not match):
-				if(kwargs["verbose"]):
-					print("Error parsing: {}".format(line))
-				continue
-			else:
-				accName = None
-				ntHash = None
-				accStatus = True
-				domain = ""
-				machine = False
-				if(match.group("accName")):
-					accName = match.group("accName")
-				
-				if(match.group("machine")):
-					if(kwargs["verbose"]):
-						print("Skipping machine account: {}".format(accName))
-					continue
-				
-				if(match.group("ntHash")):
-					ntHash = match.group("ntHash")
-				if(match.group("accStatus") == "Dis"):
-					accStatus = False
-				if(match.group("accPwdLastSet")):
-					pass
-				if(match.group("domain")):
-					domain = match.group("domain")
+	return accounts, crackedData
 
-				accounts.add(Account(name=accName, ntHash=ntHash, status=accStatus, domain=domain))
 
-		f.close()
+def group_accounts_by_id(accounts):
+	"""Group accounts by id. Each group is sorted: current entry first, then history0, history1, ..."""
+	groups = defaultdict(list)
+	for acc in accounts:
+		groups[acc.id].append(acc)
+	for id in groups:
+		# Sort: current (entry_index None) first, then history by index
+		groups[id].sort(key=lambda a: (a.entry_index is not None, a.entry_index or 0))
+	return dict(groups)
 
-	with open(cracked,'r') as f:
-		crackedDict = {}
-		content = set(f.read().split("\n"))
-		for line in content:
-			if(not line):
-				continue
-			h, p = line.split(":",1)
-			if(not h.lower() in crackedDict):
-				crackedDict[h.lower()] = p
-		f.close()
 
-		crackedDict['31d6cfe0d16ae931b73c59d7e0c089c0'] = '[Empty Password]'
+def _damerau_levenshtein_distance(a, b):
+	"""Damerau-Levenshtein edit distance (insert, delete, substitute, transpose)."""
+	if not a:
+		return len(b)
+	if not b:
+		return len(a)
+	# d[i][j] = distance between a[:i] and b[:j]; use two rows for space
+	# d[-1][*] and d[*][-1] are infinity; row 0 is distances from ""
+	prev = list(range(len(b) + 1))
+	for i in range(1, len(a) + 1):
+		curr = [i] + [0] * len(b)
+		for j in range(1, len(b) + 1):
+			cost = 0 if a[i - 1] == b[j - 1] else 1
+			curr[j] = min(
+				curr[j - 1] + 1,
+				prev[j] + 1,
+				prev[j - 1] + cost,
+			)
+			if i >= 2 and j >= 2 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+				curr[j] = min(curr[j], prev[j - 2] + 1)
+		prev = curr
+	return prev[len(b)]
 
-	return accounts, crackedDict
+
+def _evaluate_password_patterns(entries, dl_threshold):
+	"""
+	entries: list of (entry_label, password) for cracked entries only.
+	Returns (is_predictable, pattern_description) or (False, None).
+	Uses Damerau-Levenshtein: low average normalized distance = predictable (passwords too similar).
+	"""
+	if len(entries) < 2:
+		return False, None
+	passwords = [p for (_, p) in entries]
+	pairs = [(passwords[i], passwords[j]) for i in range(len(passwords)) for j in range(i + 1, len(passwords))]
+	if not pairs:
+		return False, None
+	distances = []
+	for p1, p2 in pairs:
+		d = _damerau_levenshtein_distance(p1, p2)
+		max_len = max(len(p1), len(p2)) or 1
+		distances.append(d / max_len)
+	avg_norm_dist = sum(distances) / len(distances)
+	if avg_norm_dist < dl_threshold:
+		return True, "predictable password history (avg normalized Damerau-Levenshtein distance {:.2f}, threshold {:.2f})".format(
+			avg_norm_dist, dl_threshold
+		)
+	return False, None
+
+
+def find_predictable_pattern_accounts(accounts, crackedDict, dl_threshold):
+	"""Group by id, resolve passwords, evaluate patterns. Returns list of (account_id, base_name, domain, pattern_desc, entries_with_passwords)."""
+	for acc in accounts:
+		acc.findPassword(crackedDict)
+	groups = group_accounts_by_id(accounts)
+	results = []
+	for acc_id, acc_list in groups.items():
+		if len(acc_list) < 2:
+			continue
+		entries = []
+		for acc in acc_list:
+			if acc.password is not None:
+				label = "current" if acc.entry_type == Account.ENTRY_CURRENT else "history{}".format(acc.entry_index)
+				entries.append((label, acc.password))
+		if len(entries) < 2:
+			continue
+		predictable, desc = _evaluate_password_patterns(entries, dl_threshold=dl_threshold)
+		if predictable:
+			base_name = acc_list[0].base_name
+			domain = acc_list[0].domain
+			results.append((acc_id, base_name, domain, desc, entries))
+	return results
+
 
 def correlation(accounts, crackedDict, **kwargs):
 	enabledAcc = set()
@@ -141,94 +162,109 @@ def findAccountsWithNTHash(accounts, ntHash, **kwargs):
 
 	return sorting(result, key=lambda x: x.name, **kwargs)
 
-def showResults(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **kwargs):
+def _highlight_match(account, kwargs):
+	return (
+		(kwargs.get("highlightUser") and kwargs["highlightUser"].match(account.name)) or
+		(kwargs.get("highlightUsersFile") and account.name in kwargs["highlightUsersFile"]) or
+		(kwargs.get("showMatchingPassword") and account.password in kwargs["showMatchingPassword"]) or
+		(kwargs.get("showMatchingNTHash") and kwargs["showMatchingNTHash"].match(account.ntHash)) or
+		(kwargs.get("showMatchingNTHashesFile") and account.ntHash in kwargs["showMatchingNTHashesFile"])
+	)
+
+def showResults(allAccounts, crackedDict, enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **kwargs):
 	showOnlyEnabled = 0
 	showOnlyDisabled = 0
 	showOnlyUncrackedEnabled = 0
 	showOnlyUncrackedDisabled = 0
 	if(kwargs["highlightOnly"]):
-		showOnlyEnabled = len([account for account in enabledAcc if ((kwargs["highlightUser"] and kwargs["highlightUser"].match(account.name)) or (kwargs["highlightUsersFile"] and account.name in kwargs["highlightUsersFile"]) or (kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or (kwargs["showMatchingNTHash"] and  kwargs["showMatchingNTHash"].match(account.ntHash)) or (kwargs["showMatchingNTHashesFile"] and account.ntHash in kwargs["showMatchingNTHashesFile"]))])
+		showOnlyEnabled = len([a for a in enabledAcc if _highlight_match(a, kwargs)])
 		if(kwargs["showDisabled"]):
-			showOnlyDisabled = len([account for account in disabledAcc if ((kwargs["highlightUser"] and kwargs["highlightUser"].match(account.name)) or (kwargs["highlightUsersFile"] and account.name in kwargs["highlightUsersFile"]) or (kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or (kwargs["showMatchingNTHash"] and  kwargs["showMatchingNTHash"].match(account.ntHash)) or (kwargs["showMatchingNTHashesFile"] and account.ntHash in kwargs["showMatchingNTHashesFile"]))])
+			showOnlyDisabled = len([a for a in disabledAcc if _highlight_match(a, kwargs)])
 		if(kwargs["showUncracked"]):
-			showOnlyUncrackedEnabled = len([account for account in uncrackedEnAcc if ((kwargs["highlightUser"] and kwargs["highlightUser"].match(account.name)) or (kwargs["highlightUsersFile"] and account.name in kwargs["highlightUsersFile"]) or (kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or (kwargs["showMatchingNTHash"] and  kwargs["showMatchingNTHash"].match(account.ntHash)) or (kwargs["showMatchingNTHashesFile"] and account.ntHash in kwargs["showMatchingNTHashesFile"]))])
+			showOnlyUncrackedEnabled = len([a for a in uncrackedEnAcc if _highlight_match(a, kwargs)])
 			if(kwargs["showDisabled"]):
-				showOnlyUncrackedDisabled = len([account for account in uncrackedDisAcc if ((kwargs["highlightUser"] and kwargs["highlightUser"].match(account.name)) or (kwargs["highlightUsersFile"] and account.name in kwargs["highlightUsersFile"]) or (kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or (kwargs["showMatchingNTHash"] and  kwargs["showMatchingNTHash"].match(account.ntHash)) or (kwargs["showMatchingNTHashesFile"] and account.ntHash in kwargs["showMatchingNTHashesFile"]))])
-	
-	showEnabledAccounts(enabledAcc, showOnlyEnabled, **kwargs)
-	showDisabledAccounts(disabledAcc, showOnlyDisabled, **kwargs)
-	showUncrackedAccounts(uncrackedEnAcc, showOnlyUncrackedEnabled, uncrackedDisAcc, showOnlyUncrackedDisabled, **kwargs)
+				showOnlyUncrackedDisabled = len([a for a in uncrackedDisAcc if _highlight_match(a, kwargs)])
+
+	if kwargs.get("includeHistory"):
+		enabled_current = {a for a in enabledAcc if a.entry_type == Account.ENTRY_CURRENT}
+		enabled_history = {a for a in enabledAcc if a.entry_type == Account.ENTRY_HISTORY}
+		disabled_current = {a for a in disabledAcc if a.entry_type == Account.ENTRY_CURRENT}
+		disabled_history = {a for a in disabledAcc if a.entry_type == Account.ENTRY_HISTORY}
+		showOnlyEnabledCurrent = len([a for a in enabled_current if _highlight_match(a, kwargs)]) if kwargs["highlightOnly"] else 0
+		showOnlyEnabledHistory = len([a for a in enabled_history if _highlight_match(a, kwargs)]) if kwargs["highlightOnly"] else 0
+		showOnlyDisabledCurrent = len([a for a in disabled_current if _highlight_match(a, kwargs)]) if kwargs["highlightOnly"] else 0
+		showOnlyDisabledHistory = len([a for a in disabled_history if _highlight_match(a, kwargs)]) if kwargs["highlightOnly"] else 0
+		showEnabledAccounts(enabled_current, showOnlyEnabledCurrent, section_title="Enabled accounts", **kwargs)
+		showEnabledAccounts(enabled_history, showOnlyEnabledHistory, section_title="Enabled accounts history", **kwargs)
+		showDisabledAccounts(disabled_current, showOnlyDisabledCurrent, section_title="Disabled accounts", **kwargs)
+		showDisabledAccounts(disabled_history, showOnlyDisabledHistory, section_title="Disabled accounts history", **kwargs)
+	else:
+		showEnabledAccounts(enabledAcc, showOnlyEnabled, **kwargs)
+		showDisabledAccounts(disabledAcc, showOnlyDisabled, **kwargs)
+
+	if kwargs.get("includeHistory") and kwargs["showUncracked"]:
+		uncracked_en_current = {a for a in uncrackedEnAcc if a.entry_type == Account.ENTRY_CURRENT}
+		uncracked_en_history = {a for a in uncrackedEnAcc if a.entry_type == Account.ENTRY_HISTORY}
+		uncracked_dis_current = {a for a in uncrackedDisAcc if a.entry_type == Account.ENTRY_CURRENT}
+		uncracked_dis_history = {a for a in uncrackedDisAcc if a.entry_type == Account.ENTRY_HISTORY}
+		showOnlyUncrackedEnCurrent = len([a for a in uncracked_en_current if _highlight_match(a, kwargs)]) if kwargs["highlightOnly"] else 0
+		showOnlyUncrackedEnHistory = len([a for a in uncracked_en_history if _highlight_match(a, kwargs)]) if kwargs["highlightOnly"] else 0
+		showOnlyUncrackedDisCurrent = len([a for a in uncracked_dis_current if _highlight_match(a, kwargs)]) if kwargs["highlightOnly"] else 0
+		showOnlyUncrackedDisHistory = len([a for a in uncracked_dis_history if _highlight_match(a, kwargs)]) if kwargs["highlightOnly"] else 0
+		_showUncrackedSection(uncracked_en_current, showOnlyUncrackedEnCurrent, "Uncracked enabled accounts", **kwargs)
+		_showUncrackedSection(uncracked_en_history, showOnlyUncrackedEnHistory, "Uncracked enabled accounts history", **kwargs)
+		_showUncrackedSection(uncracked_dis_current, showOnlyUncrackedDisCurrent, "Uncracked disabled accounts", **kwargs)
+		_showUncrackedSection(uncracked_dis_history, showOnlyUncrackedDisHistory, "Uncracked disabled accounts history", **kwargs)
+	else:
+		showUncrackedAccounts(uncrackedEnAcc, showOnlyUncrackedEnabled, uncrackedDisAcc, showOnlyUncrackedDisabled, **kwargs)
 	showMatchingPassword(enabledAcc, disabledAcc, **kwargs)
 	showMatchingNTHash(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, **kwargs)
 	showMatchingNTHashesFile(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, **kwargs)
 	showPasswordReuse(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **kwargs)
+	showPredictablePatterns(allAccounts, crackedDict, **kwargs)
 	statistics(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **kwargs)
 
-def showEnabledAccounts(enabledAcc, showOnlyEnabled, **kwargs):
+def showEnabledAccounts(enabledAcc, showOnlyEnabled, section_title=None, **kwargs):
+	title = section_title if section_title is not None else "Enabled accounts"
 	if(kwargs["highlightOnly"]):
-		print("Enabled accounts ({}/{}):".format(showOnlyEnabled, len(enabledAcc)))
+		print("{} ({}/{}):".format(title, showOnlyEnabled, len(enabledAcc)))
 	else:
-		print("Enabled accounts ({}):".format(len(enabledAcc)))
+		print("{} ({}):".format(title, len(enabledAcc)))
 	for account in sorting(enabledAcc, key=attrgetter('domain', 'name'), **kwargs):
-		if(not kwargs["highlightOnly"] or (
-			(kwargs["highlightUser"] and kwargs["highlightUser"].match(account.name)) or
-			(kwargs["highlightUsersFile"] and account.name in kwargs["highlightUsersFile"]) or
-			(kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or 
-			(kwargs["showMatchingNTHash"] and  kwargs["showMatchingNTHash"].match(account.ntHash)) or 
-			(kwargs["showMatchingNTHashesFile"] and account.ntHash in kwargs["showMatchingNTHashesFile"]))):
+		if(not kwargs["highlightOnly"] or _highlight_match(account, kwargs)):
 			print(formatResult(account, **kwargs))
-		
 	print("")
 
-def showDisabledAccounts(disabledAcc, showOnlyDisabled, **kwargs):
-	if(kwargs["showDisabled"]):
+def showDisabledAccounts(disabledAcc, showOnlyDisabled, section_title=None, **kwargs):
+	title = section_title if section_title is not None else "Disabled accounts"
+	show_section = kwargs["showDisabled"] or kwargs.get("includeHistory")
+	if show_section:
 		if(kwargs["highlightOnly"]):
-			print("Disabled accounts ({}/{}):".format(showOnlyDisabled, len(disabledAcc)))
+			print("{} ({}/{}):".format(title, showOnlyDisabled, len(disabledAcc)))
 		else:
-			print("Disabled accounts ({}):".format(len(disabledAcc)))
+			print("{} ({}):".format(title, len(disabledAcc)))
 		for account in sorting(disabledAcc, key=attrgetter('domain', 'name'), **kwargs):
-			if(not kwargs["highlightOnly"] or (
-				(kwargs["highlightUser"] and kwargs["highlightUser"].match(account.name)) or
-				(kwargs["highlightUsersFile"] and account.name in kwargs["highlightUsersFile"]) or
-				(kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or 
-				(kwargs["showMatchingNTHash"] and  kwargs["showMatchingNTHash"].match(account.ntHash)) or 
-				(kwargs["showMatchingNTHashesFile"] and account.ntHash in kwargs["showMatchingNTHashesFile"]))):
+			if(not kwargs["highlightOnly"] or _highlight_match(account, kwargs)):
 				print(formatResult(account, **kwargs))
-	
 		print("")
+
+def _showUncrackedSection(acc_set, showOnlyCount, section_title, **kwargs):
+	"""Print a single uncracked section (title + account list)."""
+	if kwargs["highlightOnly"]:
+		print("{} ({}/{}):".format(section_title, showOnlyCount, len(acc_set)))
+	else:
+		print("{} ({}):".format(section_title, len(acc_set)))
+	for account in sorting(acc_set, key=attrgetter('domain', 'name'), **kwargs):
+		if not kwargs["highlightOnly"] or _highlight_match(account, kwargs):
+			print(formatResult(account, **kwargs))
+	print("")
+
 
 def showUncrackedAccounts(uncrackedEnAcc, showOnlyUncrackedEnabled, uncrackedDisAcc, showOnlyUncrackedDisabled, **kwargs):
-	if(kwargs["showUncracked"]):
-		if(kwargs["highlightOnly"]):
-			print("Uncracked enabled accounts ({}/{}):".format(showOnlyUncrackedEnabled, len(uncrackedEnAcc)))
-		else:
-			print("Uncracked enabled accounts ({}):".format(len(uncrackedEnAcc)))
-		for account in sorting(uncrackedEnAcc, key=attrgetter('domain', 'name'), **kwargs):
-			if(not kwargs["highlightOnly"] or (
-				(kwargs["highlightUser"] and kwargs["highlightUser"].match(account.name)) or
-				(kwargs["highlightUsersFile"] and account.name in kwargs["highlightUsersFile"]) or
-				(kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or 
-				(kwargs["showMatchingNTHash"] and  kwargs["showMatchingNTHash"].match(account.ntHash)) or 
-				(kwargs["showMatchingNTHashesFile"] and account.ntHash in kwargs["showMatchingNTHashesFile"]))):
-				print(formatResult(account, **kwargs))
-
-		print("")
-
-		if(kwargs["showDisabled"]):
-			if(kwargs["highlightOnly"]):
-				print("Uncracked disabled accounts ({}/{}):".format(showOnlyUncrackedDisabled, len(uncrackedDisAcc)))
-			else:
-				print("Uncracked disabled accounts ({}):".format(len(uncrackedDisAcc)))
-			for account in sorting(uncrackedDisAcc, key=attrgetter('domain', 'name'), **kwargs):
-				if(not kwargs["highlightOnly"] or (
-					(kwargs["highlightUser"] and kwargs["highlightUser"].match(account.name)) or
-					(kwargs["highlightUsersFile"] and account.name in kwargs["highlightUsersFile"]) or
-					(kwargs["showMatchingPassword"] and  account.password in kwargs["showMatchingPassword"]) or 
-					(kwargs["showMatchingNTHash"] and  kwargs["showMatchingNTHash"].match(account.ntHash)) or 
-					(kwargs["showMatchingNTHashesFile"] and account.ntHash in kwargs["showMatchingNTHashesFile"]))):
-					print(formatResult(account, **kwargs))
-		
-			print("")
+	if kwargs["showUncracked"]:
+		_showUncrackedSection(uncrackedEnAcc, showOnlyUncrackedEnabled, "Uncracked enabled accounts", **kwargs)
+		if kwargs["showDisabled"]:
+			_showUncrackedSection(uncrackedDisAcc, showOnlyUncrackedDisabled, "Uncracked disabled accounts", **kwargs)
 
 def showMatchingPassword(enabledAcc, disabledAcc, **kwargs):
 	if(kwargs["showMatchingPassword"]):
@@ -286,6 +322,27 @@ def showMatchingNTHashesFile(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedD
 
 			print("")
 
+def showPredictablePatterns(allAccounts, crackedDict, **kwargs):
+	"""Group accounts by ID, evaluate password history similarity, report predictable patterns."""
+	if not kwargs.get("showPredictablePatterns"):
+		return
+	if not allAccounts or not crackedDict:
+		return
+	dl_threshold = kwargs.get("dlThreshold", 0.25)
+	results = find_predictable_pattern_accounts(allAccounts, crackedDict, dl_threshold)
+	if not results:
+		print("Predictable password patterns: none detected.")
+		print("")
+		return
+	print("Predictable password patterns ({} account(s)):".format(len(results)))
+	for acc_id, base_name, domain, pattern_desc, entries in sorting(results, key=lambda x: (x[2], x[1]), **kwargs):
+		display = "{}\\{}".format(domain, base_name) if domain else base_name
+		print("{tab}ID {id} ({display}): {desc}".format(tab=tab, id=acc_id, display=display, desc=pattern_desc))
+		for label, pwd in entries:
+			print("{tab}{tab}{label}: {pwd}".format(tab=tab, label=label, pwd=pwd))
+	print("")
+
+
 def showPasswordReuse(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **kwargs):
 	if(kwargs["showPasswordReuse"] and kwargs["showPasswordReuse"] > 1):
 		accounts = enabledAcc.copy()
@@ -322,70 +379,91 @@ def showPasswordReuse(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, 
 
 				print("")
 
+def _print_stats_block(enabled, disabled, uncracked_en, uncracked_dis, spacing, block_title=None, **kwargs):
+	"""Print one stats block (current or historical). Uses only the provided sets; never mixes in other data."""
+	nbEnabled = decimal.Decimal(len(enabled))
+	nbDisabled = decimal.Decimal(len(disabled))
+	nbUncrackedEnabled = decimal.Decimal(len(uncracked_en))
+	nbUncrackedDisabled = decimal.Decimal(len(uncracked_dis))
+	nbUncracked = nbUncrackedEnabled + nbUncrackedDisabled
+	nbCracked = nbEnabled + nbDisabled
+	totalEnabled = nbEnabled + nbUncrackedEnabled
+	totalDisabled = nbDisabled + nbUncrackedDisabled
+	total = nbEnabled + nbDisabled + nbUncracked
+	if total <= 0:
+		return
+	decimal.getcontext().prec = 4
+	pCrackedEnabled = decimal.Decimal((nbEnabled / totalEnabled) * 100) if totalEnabled != 0 else 0
+	pCrackedDisabled = decimal.Decimal((nbDisabled / totalDisabled) * 100) if totalDisabled != 0 else 0
+	pCracked = decimal.Decimal((nbEnabled / total) * 100)
+	pDisCracked = decimal.Decimal((nbDisabled / total) * 100)
+	pTotalCracked = decimal.Decimal(((nbEnabled + nbDisabled) / total) * 100)
+	section = (block_title + "\n") if block_title else ""
+	print(section + "{tab}Enabled Accounts".format(tab=tab))
+	print("{tab}Number of cracked enabled (en):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-35-len(tab)-len(str(nbEnabled))), percent=nbEnabled))
+	print("{tab}Number of uncracked enabled (ue):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-37-len(tab)-len(str(nbUncrackedEnabled))), percent=nbUncrackedEnabled))
+	print("{tab}Total of enabled (te=en+ue):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-32-len(tab)-len(str(totalEnabled))), percent=totalEnabled))
+	print("{tab}Percentage of cracked (en/te):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-34-len(tab)-len(str(pCrackedEnabled))-1), percent=pCrackedEnabled))
+	print("")
+	print("{tab}Disabled Accounts".format(tab=tab))
+	print("{tab}Number of cracked disabled (dis):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-37-len(tab)-len(str(nbDisabled))), percent=nbDisabled))
+	print("{tab}Number of uncracked disabled (ud):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-38-len(tab)-len(str(nbUncrackedDisabled))), percent=nbUncrackedDisabled))
+	print("{tab}Total of disabled (td=dis+ud):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-34-len(tab)-len(str(totalDisabled))), percent=totalDisabled))
+	print("{tab}Percentage of cracked (dis/td):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-35-len(tab)-len(str(pCrackedDisabled))-1), percent=pCrackedDisabled))
+	print("")
+	print("{tab}Every Account".format(tab=tab))
+	print("{tab}Number of cracked (c=en+dis):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-33-len(tab)-len(str(nbCracked))), percent=nbCracked))
+	print("{tab}Number of uncracked (uc=ue+ud):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-35-len(tab)-len(str(nbUncracked))), percent=nbUncracked))
+	print("{tab}Total (t=c+uc):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-19-len(tab)-len(str(total))), percent=total))
+	print("{tab}Percentage of cracked (en/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-33-len(tab)-len(str(pCracked))-1), percent=pCracked))
+	print("{tab}Percentage of cracked (dis/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-34-len(tab)-len(str(pDisCracked))-1), percent=pDisCracked))
+	print("{tab}Percentage of cracked ((en+dis)/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-39-len(tab)-len(str(pTotalCracked))-1), percent=pTotalCracked))
+
+
 def statistics(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **kwargs):
-	if(kwargs["showStats"]):
-		spacing = 55
-		nbEnabled = decimal.Decimal(len(enabledAcc))
-		nbDisabled = decimal.Decimal(len(disabledAcc))
-		nbUncrackedEnabled = decimal.Decimal(len(uncrackedEnAcc))
-		nbUncrackedDisabled = decimal.Decimal(len(uncrackedDisAcc))
-		nbUncracked = decimal.Decimal(len(uncrackedEnAcc) + len(uncrackedDisAcc))
-		nbCracked = nbEnabled+nbDisabled
-		totalEnabled = nbEnabled+nbUncrackedEnabled
-		totalDisabled = nbDisabled+nbUncrackedDisabled
-		total = nbEnabled+nbDisabled+nbUncracked
+	if not kwargs["showStats"]:
+		return
+	spacing = 55
+	# Split by entry type: current-only for main stats, history-only for historical subsection (never mixed)
+	enabled_current = {a for a in enabledAcc if a.entry_type == Account.ENTRY_CURRENT}
+	disabled_current = {a for a in disabledAcc if a.entry_type == Account.ENTRY_CURRENT}
+	uncracked_en_current = {a for a in uncrackedEnAcc if a.entry_type == Account.ENTRY_CURRENT}
+	uncracked_dis_current = {a for a in uncrackedDisAcc if a.entry_type == Account.ENTRY_CURRENT}
+	enabled_history = {a for a in enabledAcc if a.entry_type == Account.ENTRY_HISTORY}
+	disabled_history = {a for a in disabledAcc if a.entry_type == Account.ENTRY_HISTORY}
+	uncracked_en_history = {a for a in uncrackedEnAcc if a.entry_type == Account.ENTRY_HISTORY}
+	uncracked_dis_history = {a for a in uncrackedDisAcc if a.entry_type == Account.ENTRY_HISTORY}
 
-		if(total > 0):
-			decimal.getcontext().prec = 4
-			pCracked = decimal.Decimal((nbEnabled/total)*100)
-			pCrackedEnabled = decimal.Decimal((nbEnabled/totalEnabled)*100) if totalEnabled != 0 else 0
-			pCrackedDisabled = decimal.Decimal((nbDisabled/totalDisabled)*100) if totalDisabled != 0 else 0
-			pDisCracked = decimal.Decimal((nbDisabled/total)*100)
-			pTotalCracked = decimal.Decimal(((nbEnabled+nbDisabled)/total)*100)
-
-			print("Statistics:")
-			print("{tab}Enabled Accounts".format(tab=tab))
-			print("{tab}Number of cracked enabled (en):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-35-len(tab)-len(str(nbEnabled))), percent=nbEnabled))
-			print("{tab}Number of uncracked enabled (ue):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-37-len(tab)-len(str(nbUncrackedEnabled))), percent=nbUncrackedEnabled))
-			print("{tab}Total of enabled (te=en+ue):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-32-len(tab)-len(str(totalEnabled))), percent=totalEnabled))
-			print("{tab}Percentage of cracked (en/te):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-34-len(tab)-len(str(pCrackedEnabled))-1), percent=pCrackedEnabled))
-			print("")
-			print("{tab}Disabled Accounts".format(tab=tab))
-			print("{tab}Number of cracked disabled (dis):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-37-len(tab)-len(str(nbDisabled))), percent=nbDisabled))
-			print("{tab}Number of uncracked disabled (ud):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-38-len(tab)-len(str(nbUncrackedDisabled))), percent=nbUncrackedDisabled))
-			print("{tab}Total of disabled (td=dis+ud):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-34-len(tab)-len(str(totalDisabled))), percent=totalDisabled))
-			print("{tab}Percentage of cracked (dis/td):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-35-len(tab)-len(str(pCrackedDisabled))-1), percent=pCrackedDisabled))
-			print("")
-			print("{tab}Every Account".format(tab=tab))
-			print("{tab}Number of cracked (c=en+dis):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-33-len(tab)-len(str(nbCracked))), percent=nbCracked))
-			print("{tab}Number of uncracked (uc=ue+ud):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-35-len(tab)-len(str(nbUncracked))), percent=nbUncracked))
-			print("{tab}Total (t=c+uc):{padding}{percent}".format(tab=tab*2, padding=" "*(spacing-19-len(tab)-len(str(total))), percent=total))
-			print("{tab}Percentage of cracked (en/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-33-len(tab)-len(str(pCracked))-1), percent=pCracked))
-			print("{tab}Percentage of cracked (dis/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-34-len(tab)-len(str(pDisCracked))-1), percent=pDisCracked))
-			print("{tab}Percentage of cracked ((en+dis)/t):{padding}{percent}%".format(tab=tab*2, padding=" "*(spacing-39-len(tab)-len(str(pTotalCracked))-1), percent=pTotalCracked))
-			print("")
-			if(kwargs["showDisabled"]):
-				print("{tab}Password/hash count (en/t):".format(tab=tab))
-			else:
-				print("{tab}Password/hash count:".format(tab=tab))
-
-			for k, v in dict(sorting(passwordCount.items(), key=lambda x: x[1][True] + x[1][False], reverse=True, **kwargs)).items():
-				if(kwargs["showDisabled"]):
-					if(v[True] + v[False] > 1):
-						value = "{}/{}".format(v[True], v[True] + v[False])
-					else:
-						continue
-				else:
-					if(v[True] > 1): 
-						value = str(v[True])
-					else:
-						continue
-				
-				print("{tab}{isHash}{password}{padding}{value}".format(tab=tab*2, isHash="[hash] " if ntHashRegex.match(k) else "", password=k, padding=" "*(spacing-len(tab*2) - len(k) - len(value) - (len("[hash] ") if ntHashRegex.match(k) else 0)), value=value))
-
-			print("")
+	total_current = len(enabled_current) + len(disabled_current) + len(uncracked_en_current) + len(uncracked_dis_current)
+	if total_current > 0:
+		print("Statistics:")
+		_print_stats_block(enabled_current, disabled_current, uncracked_en_current, uncracked_dis_current, spacing, **kwargs)
+		print("")
+		if kwargs["showDisabled"]:
+			print("{tab}Password/hash count (en/t):".format(tab=tab))
 		else:
-			print("Can't show stats if the total number of accounts is 0...")
+			print("{tab}Password/hash count:".format(tab=tab))
+		for k, v in dict(sorting(passwordCount.items(), key=lambda x: x[1][True] + x[1][False], reverse=True, **kwargs)).items():
+			if kwargs["showDisabled"]:
+				if v[True] + v[False] > 1:
+					value = "{}/{}".format(v[True], v[True] + v[False])
+				else:
+					continue
+			else:
+				if v[True] > 1:
+					value = str(v[True])
+				else:
+					continue
+			print("{tab}{isHash}{password}{padding}{value}".format(tab=tab*2, isHash="[hash] " if ntHashRegex.match(k) else "", password=k, padding=" "*(spacing-len(tab*2) - len(k) - len(value) - (len("[hash] ") if ntHashRegex.match(k) else 0)), value=value))
+		print("")
+	else:
+		print("Can't show stats if the total number of accounts is 0...")
+
+	total_history = len(enabled_history) + len(disabled_history) + len(uncracked_en_history) + len(uncracked_dis_history)
+	if total_history > 0:
+		print("Statistics (historical data only):")
+		_print_stats_block(enabled_history, disabled_history, uncracked_en_history, uncracked_dis_history, spacing, **kwargs)
+		print("")
 
 def formatResult(account, showPassword=True, **kwargs):
 	p = ""
@@ -473,6 +551,9 @@ if __name__=='__main__':
 	parser.add_argument("-U", "--user", dest="highlightUser", help="Highlight matching user in the result (regex).", type=str.lower,default=None)
 	parser.add_argument("--users-file", dest="highlightUsersFile", help="Highlight matching users in the result by providing a file splitted by newlines.", type=str,default=None)
 	parser.add_argument("-H", "--highlight-only", dest="highlightOnly", help="Show only highlists results (requires showMatchingDomain, showMatchingPassword, showMatchingNTHash or highlightUser).", action="store_true")
+	parser.add_argument("-pp", "--predictable-patterns", dest="showPredictablePatterns", help="Group accounts by ID, evaluate password history similarity, report users with predictable patterns.", action="store_true")
+	parser.add_argument("-dl", "--dl-threshold", dest="dlThreshold", type=float, default=0.25, help="Max avg normalized Damerau-Levenshtein distance below which password history is flagged as predictable; lower = stricter (default: %(default)s).")
+	parser.add_argument("-hi", "--history", dest="includeHistory", help="Include historical password entries (entry_history0, entry_history1, ...) in stats: enabled/disabled/uncracked counts, password reuse, statistics. Default: only current entry per account. Predictable-patterns check always uses history.", action="store_true")
 	parser.add_argument("-p", "--performance", dest="performance", help="Need more performance? This will NOT sort the results.", action="store_true")
 	parser.add_argument("-t", "--time", dest="time", help="Print the elasped time to run the script.", action="store_true")
 	args = parser.parse_args()
@@ -556,6 +637,7 @@ if __name__=='__main__':
 		args.showNTHash = True
 		args.showDomain = True
 		args.showStats = True
+		args.showPredictablePatterns = True
 		args.showPasswordReuse = INT_MAXSIZE if args.showPasswordReuse is None else args.showPasswordReuse
 
 	if(args.dump and (not os.path.exists(args.dump) or not os.path.isfile(args.dump))):
@@ -563,8 +645,12 @@ if __name__=='__main__':
 	if(args.cracked and (not os.path.exists(args.cracked) or not os.path.isfile(args.cracked))):
 		raise FileNotFoundError("{} was not found.".format(args.cracked))
 
-	(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount) = correlation(*getContent(**vars(args)), **vars(args))
-	showResults(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **vars(args))
+	allAccounts, crackedDict = getContent(args.dump, args.cracked, args.verbose)
+	
+	# For stats/correlation: include history only when --history; predictable-patterns always uses full accounts
+	accounts_for_stats = allAccounts if args.includeHistory else {a for a in allAccounts if a.entry_type == Account.ENTRY_CURRENT}
+	(enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount) = correlation(accounts_for_stats, crackedDict, **vars(args))
+	showResults(allAccounts, crackedDict, enabledAcc, disabledAcc, uncrackedEnAcc, uncrackedDisAcc, passwordCount, **vars(args))
 
 	if(args.time or args.verbose):
 		endTime = decimal.Decimal(time())
