@@ -1,6 +1,6 @@
 import re
 
-from account import Account
+from linker.account import Account
 
 # Matches _history0, _history1, etc. at end of account name
 _history_suffix_re = re.compile(r"_history(\d+)$", re.IGNORECASE)
